@@ -1,0 +1,9 @@
+{
+  "name": "ShiftCentral",
+  "short_name": "ShiftCentral",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": []
+}

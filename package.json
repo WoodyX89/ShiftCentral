@@ -1,0 +1,19 @@
+{
+  "name": "shiftcentral",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "cap:sync": "mkdir -p www && cp -f *.html app.js style.css logo.png manifest.webmanifest navbar.html www/ && npx cap sync",
+    "cap:ios": "npm run cap:sync && npx cap open ios",
+    "cap:android": "npx cap sync && npx cap open android"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3"
+  },
+  "dependencies": {
+    "@capacitor/app": "^7.0.1",
+    "@capacitor/ios": "^7.6.9",
+    "@capacitor/status-bar": "^7.0.1"
+  }
+}

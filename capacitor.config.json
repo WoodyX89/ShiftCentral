@@ -1,0 +1,12 @@
+{
+  "appId": "com.shiftcentral.app",
+  "appName": "ShiftCentral",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": [
+      "*.supabase.co"
+    ]
+  }
+}
