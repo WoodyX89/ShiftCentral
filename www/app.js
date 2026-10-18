@@ -12,96 +12,148 @@ const isMobile = isApp || window.matchMedia('(max-width: 700px)').matches;
 document.body.classList.add(isApp ? 'is-app' : 'is-web');
 if (isMobile) document.body.classList.add('is-mobile');
 
+const NAV_HTML = `<header class="topbar">
+  <a href="schedule.html" class="brand"><img src="logo.png" alt="ShiftCentral" /></a>
+  <nav class="top-nav" id="top-nav">
+    <a href="schedule.html" data-nav="schedule">Home</a>
+    <a href="overtime.html" data-nav="overtime">OT</a>
+    <a href="messages.html" data-nav="messages">Chat</a>
+    <a href="graph.html" data-nav="graph">Stats</a>
+    <a href="settings.html" data-nav="settings">Settings</a>
+  </nav>
+  <div class="user-bar">
+    <button type="button" id="nav-notes" class="icon-btn note-btn" aria-label="Notifications" title="Notifications" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      <span id="note-badge" class="note-badge" hidden>0</span>
+    </button>
+    <div id="note-panel" class="note-panel" hidden></div>
+    <a href="settings.html" class="icon-btn" data-nav="settings" aria-label="Settings" title="Settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.7.9 1.1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </a>
+    <span id="nav-dot" class="nav-dot" hidden title="Logged in"></span>
+    <button type="button" id="nav-logout" class="icon-btn" aria-label="Sign out" title="Sign out">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+    </button>
+  </div>
+</header>
+<nav class="bottom-nav">
+  <a href="schedule.html" data-nav="schedule"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg><span>Home</span></a>
+  <a href="overtime.html" data-nav="overtime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></svg><span>OT</span></a>
+  <a href="messages.html" data-nav="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/></svg><span>Chat</span></a>
+  <a href="graph.html" data-nav="graph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15v-4"/><path d="M12 15V8"/><path d="M16 15v-6"/></svg><span>Stats</span></a>
+</nav>`;
+
 async function loadNavbar(active) {
   const slot = document.getElementById('navbar');
   if (!slot) return;
-  try {
-    const res = await fetch('navbar.html');
-    slot.innerHTML = await res.text();
-  } catch {
-    slot.innerHTML = `<div class="user-bar"><span id="nav-user">Signed in</span><button type="button" id="nav-logout" class="secondary">Log out</button></div>`;
-  }
+  slot.innerHTML = NAV_HTML;
   slot.querySelectorAll('[data-nav]').forEach(a => {
     if (a.dataset.nav === active) a.classList.add('active');
   });
   const session = await getSession();
-  const userEl = document.getElementById('nav-user');
-  if (userEl) userEl.textContent = 'Logged in as: ' + (session?.user?.email || '…');
-  document.getElementById('nav-logout')?.addEventListener('click', () => {
-    sb.auth.signOut().then(() => location.href = 'index.html');
+  window.__scEmail = session?.user?.email || session?.user?.user_metadata?.email || '';
+  document.getElementById('nav-logout')?.addEventListener('click', async () => {
+    await sb.auth.signOut();
+    location.href = 'index.html';
   });
   document.getElementById('menu-btn')?.addEventListener('click', () => {
     document.getElementById('top-nav')?.classList.toggle('open');
   });
   loadNotifications();
+  registerPush();
+}
+
+async function registerPush() {
+  if (!window.Capacitor?.Plugins?.PushNotifications) return;
+  try {
+    const Push = window.Capacitor.Plugins.PushNotifications;
+    const perm = await Push.requestPermissions();
+    if (perm.receive !== 'granted') return;
+    await Push.register();
+    Push.addListener('registration', async (token) => {
+      const session = await getSession();
+      if (!session || !token?.value) return;
+      await sb.from('device_tokens').upsert({
+        user_id: session.user.id, token: token.value, platform: 'ios'
+      }, { onConflict: 'token' });
+    });
+  } catch (e) {}
 }
 
 async function loadNotifications() {
   const btn = document.getElementById('nav-notes');
   const badge = document.getElementById('note-badge');
-  const panel = document.getElementById('note-panel');
-  if (!btn || !panel) return;
+  if (!btn || !badge) return;
   const session = await getSession();
   if (!session) return;
   const memberships = await loadMemberships();
   const saved = getSavedOrg();
   const current = memberships.find(m => m.org_id === saved) || memberships[0];
-  if (!current || !canSchedule(current.role)) { btn.hidden = true; return; }
+  if (!current) { btn.hidden = true; return; }
   const { data: ops } = await sb.from('operators').select('name, email, role').eq('org_id', current.org_id);
   const meEmail = (session.user.email || '').toLowerCase();
   const me = (ops || []).find(o => (o.email||'').toLowerCase() === meEmail);
   const isLead = me ? ['supervisor', 'admin'].includes(me.role) : canSchedule(current.role);
-  const seenKey = 'sc_seen_vac_' + current.org_id;
+  if (!isLead && me && !['supervisor', 'admin'].includes(me.role) && !me) { /* keep going */ }
+  const seenKey = 'sc_seen_notes_' + current.org_id;
   const seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
   let notes = [];
   if (isLead) {
     const { data } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', current.org_id).eq('status', 'requested').order('created_at', { ascending: false });
-    notes = (data || []).map(n => ({ ...n, kind: 'request' }));
-  } else if (me?.name) {
-    const { data } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', current.org_id).ilike('name', me.name).in('status', ['approved', 'denied']);
-    notes = (data || []).filter(n => !seen.has(n.id)).map(n => ({ ...n, kind: 'result' }));
+    notes = (data || []).map(n => ({ id: 'vac-'+n.id, title: n.name + ' requested vacation', detail: n.start_date + ' → ' + n.end_date, href: 'schedule.html' }));
+    const { data: posts } = await sb.from('ot_posts').select('id, dates, hours, kind, requester_name').eq('org_id', current.org_id).eq('status', 'open');
+    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime bids open', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html' })));
+    const { data: bids } = await sb.from('ot_bids').select('id, operator_name, post_id, created_at').eq('org_id', current.org_id).order('created_at', { ascending: false }).limit(20);
+    notes = notes.concat((bids||[]).map(b => ({ id: 'bid-'+b.id, title: b.operator_name + ' bid on overtime', detail: 'Review and award', href: 'schedule.html' })));
+  } else {
+    if (me?.name) {
+      const { data } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', current.org_id).ilike('name', me.name).in('status', ['approved', 'denied']);
+      notes = (data || []).map(n => ({ id: 'vac-'+n.id, title: 'Vacation ' + n.status, detail: n.start_date + ' → ' + n.end_date, href: 'schedule.html' }));
+    }
+    const { data: posts } = await sb.from('ot_posts').select('id, dates, hours, kind, requester_name').eq('org_id', current.org_id).eq('status', 'open');
+    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime posted', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html' })));
   }
-  if (!notes.length && !isLead) { btn.hidden = true; return; }
+  notes = notes.filter(n => !seen.has(n.id));
   btn.hidden = false;
   badge.hidden = notes.length === 0;
   badge.textContent = notes.length;
-  panel.innerHTML = notes.length ? notes.map(n => n.kind === 'request' ? `
-    <div class="note-item">
-      <strong>${n.name}</strong>
-      <span>${n.start_date} → ${n.end_date}</span>
-      <button type="button" class="secondary note-ok" data-id="${n.id}">Approve</button>
-    </div>` : `
-    <div class="note-item">
-      <strong>Vacation ${n.status}</strong>
-      <span>${n.start_date} → ${n.end_date}</span>
-      <button type="button" class="secondary note-seen" data-id="${n.id}">Dismiss</button>
-    </div>`).join('') : '<p class="note-empty">No vacation requests.</p>';
   btn.onclick = (e) => {
     e.stopPropagation();
-    panel.hidden = !panel.hidden;
+    openNotes(notes, seenKey, seen);
   };
-  panel.querySelectorAll('.note-ok').forEach(b => b.onclick = async (e) => {
-    e.stopPropagation();
-    const { data: approved, error } = await sb.from('vacation_requests').update({ status: 'approved' }).eq('id', b.dataset.id).select('id');
-    if (error || !approved?.length) { banner(false, error ? explainError(error) : 'No permission'); return; }
-    banner(true, 'Vacation approved');
-    loadNotifications();
-  });
-  panel.querySelectorAll('.note-seen').forEach(b => b.onclick = (e) => {
-    e.stopPropagation();
-    seen.add(b.dataset.id);
-    localStorage.setItem(seenKey, JSON.stringify([...seen]));
-    loadNotifications();
-  });
-  if (!window.__scNoteClose) {
-    window.__scNoteClose = true;
-    document.addEventListener('click', () => {
-      const box = document.getElementById('note-panel');
-      if (box) box.hidden = true;
-    });
-  }
 }
 
+function openNotes(notes, seenKey, seen) {
+  document.getElementById('note-modal')?.remove();
+  const box = document.createElement('div');
+  box.id = 'note-modal';
+  box.className = 'modal-back';
+  box.innerHTML = `
+    <div class="modal sheet">
+      <h2>Notifications</h2>
+      ${notes.length ? notes.map(n => `
+        <button type="button" class="sheet-option note-go" data-id="${n.id}" data-href="${n.href}">
+          <strong>${n.title}</strong>
+          <span>${n.detail}</span>
+        </button>`).join('') : '<p class="note-empty">No notifications.</p>'}
+      <button type="button" class="secondary" id="note-clear">Clear notifications</button>
+      <button type="button" class="secondary" id="note-close">Close</button>
+    </div>`;
+  document.body.appendChild(box);
+  box.querySelector('#note-close').onclick = () => box.remove();
+  box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
+  box.querySelector('#note-clear').onclick = () => {
+    notes.forEach(n => seen.add(n.id));
+    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+    box.remove();
+    loadNotifications();
+  };
+  box.querySelectorAll('.note-go').forEach(b => b.onclick = () => {
+    seen.add(b.dataset.id);
+    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+    location.href = b.dataset.href;
+  });
+}
 
 
 function iso(d) {
@@ -250,7 +302,7 @@ function expandSequence(seq, startDate, count) {
 
 async function initLanding() {
   const session = await getSession();
-  if (session) { location.href = 'home.html'; return; }
+  if (session) { location.href = 'schedule.html'; return; }
   document.getElementById('app').innerHTML = `
     <div class="landing">
       <img src="logo.png" class="landing-logo" alt="ShiftCentral" />
@@ -288,7 +340,7 @@ async function initHome() {
       const { error } = await sb.rpc('create_plant', { plant_name: name });
       if (error) { document.getElementById('msg').textContent = error.message; return; }
       const ms = await loadMemberships();
-      if (ms.length) { setSavedOrg(ms[ms.length-1].org_id); location.href = 'home.html'; }
+      if (ms.length) { setSavedOrg(ms[ms.length-1].org_id); location.href = 'schedule.html'; }
     };
     document.getElementById('out').onclick = () => sb.auth.signOut().then(() => location.href = 'index.html');
     return;
@@ -312,7 +364,7 @@ async function initHome() {
     <button class="secondary" id="out">Sign out</button>
   `;
   document.querySelectorAll('.plant-card').forEach(btn => {
-    btn.onclick = () => { setSavedOrg(btn.dataset.org); location.href = 'home.html'; };
+    btn.onclick = () => { setSavedOrg(btn.dataset.org); location.href = 'schedule.html'; };
   });
   document.getElementById('out').onclick = () => sb.auth.signOut().then(() => location.href = 'index.html');
 }
@@ -322,7 +374,7 @@ async function initAuth() {
   const params = new URLSearchParams(location.search);
   let mode = params.get('mode') || 'signin';
   const session = await getSession();
-  if (session) { location.href = 'home.html'; return; }
+  if (session) { location.href = 'schedule.html'; return; }
 
   function render() {
     const title = mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Reset password' : mode === 'plant' ? 'Sign your plant up' : 'Sign in';
@@ -367,7 +419,7 @@ async function initAuth() {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) { msg.textContent = error.message; return; }
       await acceptPendingInvites();
-      location.href = 'home.html';
+      location.href = 'schedule.html';
     };
   }
   render();
@@ -449,7 +501,7 @@ function renderPlantPicker(app, session, memberships) {
       const { error } = await sb.rpc('create_plant', { plant_name: name });
       if (error) { document.getElementById('msg').textContent = error.message; return; }
       const ms = await loadMemberships();
-      if (ms.length) { setSavedOrg(ms[ms.length-1].org_id); location.href = 'home.html'; }
+      if (ms.length) { setSavedOrg(ms[ms.length-1].org_id); location.href = 'schedule.html'; }
     };
     document.getElementById('out').onclick = () => sb.auth.signOut();
     return;
@@ -467,7 +519,7 @@ function renderPlantPicker(app, session, memberships) {
     <button class="secondary" id="out">Sign out</button>
   `;
   document.querySelectorAll('.plant-card').forEach(btn => {
-    btn.onclick = () => { setSavedOrg(btn.dataset.org); location.href = 'home.html'; };
+    btn.onclick = () => { setSavedOrg(btn.dataset.org); location.href = 'schedule.html'; };
   });
   document.getElementById('out').onclick = () => sb.auth.signOut();
 }
@@ -483,6 +535,11 @@ async function initSchedule() {
   const crews = Object.keys(applied).sort((a, b) => a.localeCompare(b));
   const operators = await loadOperators(orgId);
   const meEmail = (ctx.session.user.email || '').toLowerCase();
+  const fullName = (() => {
+    const op = operators.find(o => (o.email||'').toLowerCase() === meEmail);
+    const raw = op?.name || ctx.session.user.user_metadata?.full_name || meEmail.split('@')[0] || 'there';
+    return String(raw).trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  })();
   const meOp = operators.find(o => (o.email||'').toLowerCase() === meEmail)
     || operators.find(o => meEmail && (o.name||'').toLowerCase() && meEmail.includes((o.name||'').toLowerCase()));
   const myCrewOps = meOp?.crew ? operators.filter(o => o.crew === meOp.crew) : (meOp ? [meOp] : []);
@@ -491,6 +548,12 @@ async function initSchedule() {
   const areas = await loadAreas(orgId);
   const quals = await loadQuals(orgId);
   let dayAreas = await loadAssignments(orgId);
+  const { data: otPostRows } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name').eq('org_id', orgId).eq('status', 'open');
+  let otPosts = otPostRows || [];
+  const { data: otBidRows } = otPosts.length
+    ? await sb.from('ot_bids').select('id, post_id, operator_name').in('post_id', otPosts.map(p => p.id))
+    : { data: [] };
+  let otBids = otBidRows || [];
   const { data: vacRows } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', orgId).eq('status', 'approved');
   const vacations = (vacRows || []).map(v => ({ id: v.id, name: v.name, start: v.start_date, end: v.end_date, status: v.status }));
   let selected = crews[0] || null;
@@ -554,7 +617,9 @@ async function initSchedule() {
       const vac = vacationsOn(date);
       const vacCls = vac.length ? ' has-vac' : '';
       const vacBadge = vac.length ? `<span class="vac-dot" title="${vac.length} on vacation"></span>` : '';
-      cells += `<div class="cal-day${sel}${today}${vacCls}" data-date="${date}"><span class="n">${d}</span><span class="crews">${crewLabel}</span>${vacBadge}</div>`;
+      const cover = otPosts.find(p => (p.dates||[]).includes(date));
+      const otBadge = cover ? `<span class="ot-mark" title="${cover.kind==='vot'?'Volunteer overtime':'Overtime coverage'}">${cover.kind==='vot'?'VOT':'OT'}</span>` : '';
+      cells += `<div class="cal-day${sel}${today}${vacCls}${cover?' has-ot':''}" data-date="${date}"><span class="n">${d}</span><span class="crews">${crewLabel}</span>${vacBadge}${otBadge}</div>`;
     }
 
     const crewBtns = crews.map(c => `<button type="button" class="crew-tab${c===selected?' active':''}" data-c="${c}">${c}</button>`).join('') || '<span style="color:#94a3b8;font-size:12px">No crew rotations yet</span>';
@@ -653,6 +718,7 @@ async function initSchedule() {
     const dateLabel = dates.length > 1 ? `${dates[0]} → ${dates[dates.length-1]}` : primary;
     const hint = `<p class="hint">Click a day or drag a set.</p>`;
     const viewBody = `<h2 style="margin-top:0">Working this day</h2>${readOnlyRoster}`;
+    const matchingPosts = otPosts.filter(p => (p.dates||[]).some(d => selectedDates.has(d)));
     const sheetHtml = !sheet ? '' : sheet === 'menu' ? `
       <div class="modal-back" id="sheet-back">
         <div class="modal sheet">
@@ -666,6 +732,22 @@ async function initSchedule() {
             <strong>${canBook ? 'Book vacation' : 'Request vacation'}</strong>
             <span>${canBook ? 'Put a crew operator on vacation' : 'Request the selected days'}</span>
           </button>
+          ${canEdit ? `<button type="button" class="sheet-option" id="opt-ot">
+            <strong>Post overtime</strong>
+            <span>${dates.length > 1 ? 'One operator covers the selected days' : 'Post this day for bids'}</span>
+          </button>` : ''}
+          <button type="button" class="sheet-option" id="opt-vot">
+            <strong>Request VOT</strong>
+            <span>Ask for these days to be covered</span>
+          </button>
+          ${!canEdit ? `<button type="button" class="sheet-option" id="opt-bid">
+            <strong>Bid on overtime</strong>
+            <span>Submit a bid for open coverage</span>
+          </button>` : ''}
+          ${canEdit ? `<button type="button" class="sheet-option" id="opt-award">
+            <strong>Review bids</strong>
+            <span>Award the shift</span>
+          </button>` : ''}
           ${canEdit ? `<button type="button" class="sheet-option" id="opt-edit">
             <strong>Edit schedule</strong>
             <span>Set areas for ${selected || 'the crew'}</span>
@@ -701,6 +783,60 @@ async function initSchedule() {
           ${viewBody}
           <button type="button" class="secondary" id="sheet-back-btn">Back</button>
         </div>
+      </div>` : sheet === 'vot' ? `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">Request VOT</p>
+          <h2>${dateLabel}</h2>
+          <p class="hint">This posts the selected days for other operators to bid on.</p>
+          <label>Hours per day</label>
+          <input id="vot-hours" type="number" min="0.5" step="0.5" value="12" />
+          <label>Note</label>
+          <input id="vot-note" placeholder="Optional" />
+          <button id="vot-submit">Request coverage</button>
+          <button type="button" class="secondary" id="sheet-back-btn">Back</button>
+        </div>
+      </div>` : sheet === 'otpost' ? `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">Post overtime</p>
+          <h2>${dateLabel}</h2>
+          <p class="hint">${dates.length > 1 ? 'These days are one coverage for a single operator.' : 'This day is posted on its own.'}</p>
+          <label>Hours per day</label>
+          <input id="ot-hours" type="number" min="0.5" step="0.5" value="12" />
+          <label>Note</label>
+          <input id="ot-note" placeholder="Optional" />
+          <button id="ot-post">Post and notify operators</button>
+          <button type="button" class="secondary" id="sheet-back-btn">Back</button>
+        </div>
+      </div>` : sheet === 'otbid' ? `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">Bid on overtime</p>
+          <h2>${dateLabel}</h2>
+          ${matchingPosts.map(post => `
+            <div class="person-card">
+              <div class="person-name">${(post.dates||[]).join(', ')}</div>
+              <div class="person-meta">${post.hours}h${post.note ? ' · ' + post.note : ''}</div>
+              <button type="button" class="bid-btn" data-id="${post.id}">${otBids.some(b => b.post_id===post.id && b.operator_name===meOp?.name) ? 'Bid submitted' : 'Submit bid'}</button>
+            </div>`).join('') || '<p style="color:#94a3b8">No open overtime for these days.</p>'}
+          <button type="button" class="secondary" id="sheet-back-btn">Back</button>
+        </div>
+      </div>` : sheet === 'otaward' ? `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">Review bids</p>
+          <h2>${dateLabel}</h2>
+          ${matchingPosts.map(post => `
+            <div class="person-card">
+              <div class="person-name">${(post.dates||[]).join(', ')}</div>
+              <div class="person-meta">${post.hours}h</div>
+              ${(otBids.filter(b => b.post_id===post.id).map(b => `<div class="row"><span>${b.operator_name}</span><button type="button" class="secondary award-btn" data-post="${post.id}" data-name="${b.operator_name}" style="width:auto;padding:4px 8px">Award</button></div>`).join('')) || '<p style="color:#94a3b8;font-size:13px">No bids yet.</p>'}
+              <button type="button" class="lowest-btn" data-post="${post.id}">Select Lowest Annual OT Hours</button>
+              <button type="button" class="secondary deny-btn" data-post="${post.id}">Deny</button>
+            </div>`).join('') || '<p style="color:#94a3b8">No open overtime for these days.</p>'}
+          <button type="button" class="secondary" id="sheet-back-btn">Back</button>
+        </div>
       </div>` : `
       <div class="modal-back" id="sheet-back">
         <div class="modal sheet">
@@ -714,8 +850,9 @@ async function initSchedule() {
       </div>`;
 
     app.innerHTML = `
+      ${isApp ? `<p class="logged-line">Logged in as: ${ctx.session.user.email || ''}</p>` : ''}
       <p class="role">${ROLE_LABEL[ctx.current.role]} · ${ctx.current.organizations?.name||''}</p>
-      <h1>Schedule</h1>
+      <h1>Welcome, ${fullName}</h1>
       ${hint}
 
       <div class="cal-nav">
@@ -743,9 +880,18 @@ async function initSchedule() {
         el.classList.toggle('selected', selectedDates.has(el.dataset.date));
       });
     };
+    let holdTimer = null;
+    let touchSelecting = false;
+    const finish = () => {
+      dragging = false;
+      touchSelecting = false;
+      dragStart = null;
+      sheet = 'menu';
+      render();
+    };
     cal.querySelectorAll('.cal-day[data-date]').forEach(el => {
       el.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || touchSelecting) return;
         dragging = true;
         moved = false;
         dragStart = el.dataset.date;
@@ -754,21 +900,46 @@ async function initSchedule() {
         e.preventDefault();
       });
       el.addEventListener('mouseenter', (e) => {
-        if (!dragging || e.buttons !== 1) return;
+        if (!dragging || touchSelecting || e.buttons !== 1) return;
         if (el.dataset.date !== dragStart) moved = true;
         selectedDates.add(el.dataset.date);
         paint();
       });
+      el.addEventListener('touchstart', (e) => {
+        clearTimeout(holdTimer);
+        const date = el.dataset.date;
+        holdTimer = setTimeout(() => {
+          touchSelecting = true;
+          dragging = true;
+          moved = false;
+          dragStart = date;
+          selectedDates = new Set([date]);
+          paint();
+        }, 350);
+      }, { passive: true });
+      el.addEventListener('touchmove', (e) => {
+        if (!touchSelecting) { clearTimeout(holdTimer); return; }
+        e.preventDefault();
+        const t = e.touches[0];
+        const hit = document.elementFromPoint(t.clientX, t.clientY);
+        const day = hit && hit.closest ? hit.closest('.cal-day[data-date]') : null;
+        if (!day) return;
+        if (day.dataset.date !== dragStart) moved = true;
+        selectedDates.add(day.dataset.date);
+        paint();
+      }, { passive: false });
+      el.addEventListener('touchend', () => {
+        clearTimeout(holdTimer);
+        if (!touchSelecting) return;
+        finish();
+      });
+      el.addEventListener('touchcancel', () => clearTimeout(holdTimer));
     });
     if (!window.__scMouseUp) {
       window.__scMouseUp = true;
       document.addEventListener('mouseup', () => {
-        if (!dragging) return;
-        dragging = false;
-        if (!moved && dragStart) selectedDates = new Set([dragStart]);
-        dragStart = null;
-        sheet = 'menu';
-        render();
+        if (!dragging || touchSelecting) return;
+        finish();
       });
     }
 
@@ -780,6 +951,90 @@ async function initSchedule() {
     document.getElementById('opt-view')?.addEventListener('click', () => { sheet = 'view'; render(); });
     document.getElementById('opt-vac')?.addEventListener('click', () => { sheet = 'vacation'; render(); });
     document.getElementById('edit-crew-pick')?.addEventListener('change', (e) => { selected = e.target.value; render(); });
+    document.getElementById('opt-vot')?.addEventListener('click', () => { sheet = 'vot'; render(); });
+    document.getElementById('vot-submit')?.addEventListener('click', async () => {
+      if (!meOp?.name) { banner(false, 'No operator profile'); return; }
+      const hours = +document.getElementById('vot-hours').value || 12;
+      const note = document.getElementById('vot-note').value.trim();
+      const { data: row, error } = await sb.from('ot_posts').insert({
+        org_id: orgId, dates: sortedDates(), hours, note, kind: 'vot',
+        requester_name: meOp.name, created_by: ctx.session.user.id
+      }).select('id, dates, hours, note, status, kind, requester_name').single();
+      if (error) { banner(false, 'VOT not requested: ' + explainError(error)); return; }
+      otPosts.unshift(row);
+      sb.functions.invoke('send-ot-push', { body: { title: 'VOT requested', body: meOp.name + ' needs coverage', audience: 'all' } }).catch(() => {});
+      banner(true, 'VOT requested');
+      sheet = null;
+      render();
+    });
+    document.getElementById('opt-ot')?.addEventListener('click', () => { sheet = 'otpost'; render(); });
+    document.getElementById('opt-bid')?.addEventListener('click', () => { sheet = 'otbid'; render(); });
+    document.getElementById('opt-award')?.addEventListener('click', () => { sheet = 'otaward'; render(); });
+    document.getElementById('ot-post')?.addEventListener('click', async () => {
+      if (!canEdit) { banner(false, 'No permission'); return; }
+      const hours = +document.getElementById('ot-hours').value || 12;
+      const note = document.getElementById('ot-note').value.trim();
+      const { data: row, error } = await sb.from('ot_posts').insert({
+        org_id: orgId, dates: sortedDates(), hours, note, created_by: ctx.session.user.id
+      }).select('id, dates, hours, note, status').single();
+      if (error) { banner(false, 'Overtime not posted: ' + explainError(error)); return; }
+      otPosts.unshift(row);
+      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime posted', body: sortedDates().join(', ') } }).catch(() => {});
+      banner(true, 'Overtime posted');
+      sheet = null;
+      render();
+    });
+    document.querySelectorAll('.bid-btn').forEach(b => b.onclick = async () => {
+      if (!meOp?.name) { banner(false, 'No operator profile'); return; }
+      if (b.textContent === 'Bid submitted') return;
+      const { data: row, error } = await sb.from('ot_bids').insert({
+        post_id: b.dataset.id, org_id: orgId, operator_name: meOp.name, created_by: ctx.session.user.id
+      }).select('id, post_id, operator_name').single();
+      if (error) { banner(false, 'Bid not saved: ' + explainError(error)); return; }
+      otBids.push(row);
+      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime bid', body: meOp.name + ' bid on a shift' } }).catch(() => {});
+      banner(true, 'Bid submitted');
+      render();
+    });
+    async function award(postId, name) {
+      const post = otPosts.find(p => p.id === postId);
+      if (!post || !name) return;
+      const { error } = await sb.from('ot_posts').update({ status: 'awarded', awarded_name: name }).eq('id', postId);
+      if (error) { banner(false, 'Not awarded: ' + explainError(error)); return; }
+      const rows = (post.dates||[]).map(date => ({
+        org_id: orgId, user_id: ctx.session.user.id, operator_name: name,
+        work_date: date, hours: post.hours, note: 'Awarded OT', reason: 'Awarded OT'
+      }));
+      if (rows.length) await sb.from('overtime_entries').insert(rows);
+      otPosts = otPosts.filter(p => p.id !== postId);
+      banner(true, 'Awarded to ' + name);
+      sheet = null;
+      render();
+    }
+    document.querySelectorAll('.award-btn').forEach(b => b.onclick = () => award(b.dataset.post, b.dataset.name));
+    document.querySelectorAll('.deny-btn').forEach(b => b.onclick = async () => {
+      if (!canEdit) { banner(false, 'No permission'); return; }
+      const { error } = await sb.from('ot_posts').update({ status: 'denied' }).eq('id', b.dataset.post);
+      if (error) { banner(false, 'Not denied: ' + explainError(error)); return; }
+      otPosts = otPosts.filter(p => p.id !== b.dataset.post);
+      banner(true, 'Request denied');
+      sheet = null;
+      render();
+    });
+    document.querySelectorAll('.lowest-btn').forEach(b => b.onclick = async () => {
+      const names = otBids.filter(x => x.post_id === b.dataset.post).map(x => x.operator_name);
+      if (!names.length) { banner(false, 'No bids yet'); return; }
+      const year = new Date().getFullYear();
+      const { data } = await sb.from('overtime_entries').select('operator_name, hours, work_date').eq('org_id', orgId);
+      const totals = {};
+      (data||[]).forEach(e => {
+        if (!(e.work_date||'').startsWith(String(year))) return;
+        const key = (e.operator_name||'').toLowerCase();
+        totals[key] = (totals[key]||0) + (+e.hours||0);
+      });
+      const winner = names.slice().sort((a, c) => (totals[a.toLowerCase()]||0) - (totals[c.toLowerCase()]||0))[0];
+      award(b.dataset.post, winner);
+    });
     document.getElementById('opt-edit')?.addEventListener('click', () => {
       if (!canEdit) { banner(false, 'No permission'); return; }
       sheet = 'edit';
@@ -1454,6 +1709,161 @@ async function initSettings() {
   render();
 }
 
+// ---- Stats ----
+async function initGraph() { return initStats(); }
+async function initStats() {
+  loadNavbar('graph');
+  const ctx = await requirePlant();
+  if (!ctx) return;
+  const app = document.getElementById('app');
+  const orgId = ctx.current.org_id;
+  const operators = await loadOperators(orgId);
+  const areas = await loadAreas(orgId);
+  const { data, error } = await sb.from('overtime_entries').select('operator_name, work_date, hours').eq('org_id', orgId);
+  if (error) banner(false, 'Stats not loaded: ' + explainError(error));
+  const entries = data || [];
+  const { data: assigns } = await sb.from('assignments').select('work_date, area_id, is_float').eq('org_id', orgId);
+  let year = new Date().getFullYear();
+  function crewOf(name) {
+    const op = operators.find(o => (o.name||'').toLowerCase() === (name||'').toLowerCase());
+    return op?.crew || 'Unassigned';
+  }
+  function bars(list, unit) {
+    const max = Math.max(1, ...list.map(x => x[1]));
+    return list.map(([name, value]) => `
+      <div class="bar-row">
+        <div class="bar-name">${name}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round(value/max*100)}%"></div></div>
+        <div class="bar-hours">${typeof value === 'number' && unit === 'h' ? value.toFixed(1) : value}${unit}</div>
+      </div>`).join('') || '<p style="color:#94a3b8">Nothing this year.</p>';
+  }
+  function render() {
+    const yearEntries = entries.filter(e => (e.work_date||'').startsWith(String(year)));
+    const total = yearEntries.reduce((s, e) => s + (+e.hours||0), 0);
+    const byCrew = {};
+    yearEntries.forEach(e => {
+      const crew = crewOf(e.operator_name);
+      byCrew[crew] = (byCrew[crew]||0) + (+e.hours||0);
+    });
+    const crewList = Object.entries(byCrew).sort((a,b) => b[1]-a[1]);
+    const areaName = id => areas.find(a => a.id === id)?.name || 'Float';
+    const byArea = {};
+    (assigns||[]).filter(a => (a.work_date||'').startsWith(String(year)) && !a.is_float && a.area_id).forEach(a => {
+      const name = areaName(a.area_id);
+      byArea[name] = (byArea[name]||0) + 1;
+    });
+    const areaList = Object.entries(byArea).sort((a,b) => b[1]-a[1]);
+    const byPerson = {};
+    yearEntries.forEach(e => {
+      const name = e.operator_name || 'Operator';
+      byPerson[name] = (byPerson[name]||0) + (+e.hours||0);
+    });
+    const people = Object.entries(byPerson).sort((a,b) => b[1]-a[1]).slice(0, 8);
+    app.innerHTML = `
+      <p class="role">${ctx.current.organizations?.name||''}</p>
+      <h1>Stats</h1>
+      <div class="cal-nav">
+        <button type="button" class="cal-nav-btn" id="g-prev">‹</button>
+        <strong class="cal-title">${year}</strong>
+        <button type="button" class="cal-nav-btn" id="g-next">›</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><span>Plant OT</span><strong>${total.toFixed(1)}h</strong></div>
+        <div class="stat"><span>Crews</span><strong>${crewList.length}</strong></div>
+        <div class="stat"><span>Area days</span><strong>${areaList.reduce((s,x)=>s+x[1],0)}</strong></div>
+      </div>
+      <div class="panel"><h2 style="margin-top:0">Overtime by crew</h2>${bars(crewList, 'h')}</div>
+      <div class="panel"><h2 style="margin-top:0">Areas worked</h2>${bars(areaList, '')}</div>
+      <div class="panel"><h2 style="margin-top:0">Top overtime</h2>${bars(people, 'h')}</div>
+    `;
+    document.getElementById('g-prev').onclick = () => { year -= 1; render(); };
+    document.getElementById('g-next').onclick = () => { year += 1; render(); };
+  }
+  render();
+}
+
+// ---- VOT board ----
+async function initVOT() { return initVot(); }
+async function initVot() {
+  loadNavbar('vot');
+  const ctx = await requirePlant();
+  if (!ctx) return;
+  const app = document.getElementById('app');
+  const orgId = ctx.current.org_id;
+  const canEdit = canSchedule(ctx.current.role);
+  const operators = await loadOperators(orgId);
+  const meEmail = (ctx.session.user.email || '').toLowerCase();
+  const meOp = operators.find(o => (o.email||'').toLowerCase() === meEmail);
+  const { data, error } = await sb.from('ot_posts').select('id, dates, hours, note, status, kind, requester_name, awarded_name').eq('org_id', orgId).eq('kind', 'vot').order('created_at', { ascending: false });
+  if (error) banner(false, 'VOT not loaded: ' + explainError(error));
+  let posts = data || [];
+  const ids = posts.map(p => p.id);
+  const { data: bids } = ids.length ? await sb.from('ot_bids').select('id, post_id, operator_name').in('post_id', ids) : { data: [] };
+  let allBids = bids || [];
+
+  function render() {
+    const cards = posts.map(p => {
+      const mine = allBids.filter(b => b.post_id === p.id);
+      const awardBits = canEdit && p.status === 'open' ? `
+        ${mine.map(b => `<button type="button" class="secondary award-vot" data-id="${p.id}" data-name="${b.operator_name}" style="width:auto;margin-right:6px">${b.operator_name}</button>`).join('') || '<p style="color:#94a3b8;font-size:13px">No bids yet.</p>'}
+        <button type="button" class="lowest-vot" data-id="${p.id}">Select Lowest Annual OT Hours</button>
+      ` : (!canEdit && p.status === 'open' ? `<button type="button" class="bid-vot" data-id="${p.id}">${mine.some(b => b.operator_name===meOp?.name) ? 'Bid submitted' : 'Submit bid'}</button>` : `<span class="chip">${p.status}${p.awarded_name ? ' · ' + p.awarded_name : ''}</span>`);
+      const denyBit = canEdit && p.status !== 'denied' ? `<button type="button" class="secondary deny-vot" data-id="${p.id}">Deny</button>` : '';
+      const actions = awardBits + denyBit;
+      return `
+        <div class="panel">
+          <div class="vac-top"><strong>${p.requester_name || 'Operator'}</strong><span class="chip">${p.status}</span></div>
+          <div class="vac-dates">${(p.dates||[]).join(', ')}</div>
+          <p class="hint">${p.hours}h${p.note ? ' · ' + p.note : ''}</p>
+          ${actions}
+        </div>`;
+    }).join('') || '<p style="color:#94a3b8">No VOT requests.</p>';
+    app.innerHTML = `
+      <p class="role">${ctx.current.organizations?.name||''}</p>
+      <h1>VOT board</h1>
+      <p class="hint">Volunteer overtime. Operators request coverage, others bid, SS/LH or Admin awards or denies.</p>
+      ${cards}
+    `;
+    document.querySelectorAll('.bid-vot').forEach(b => b.onclick = async () => {
+      if (!meOp?.name || b.textContent === 'Bid submitted') return;
+      const { data: row, error } = await sb.from('ot_bids').insert({ post_id: b.dataset.id, org_id: orgId, operator_name: meOp.name, created_by: ctx.session.user.id }).select('id, post_id, operator_name').single();
+      if (error) { banner(false, 'Bid not saved: ' + explainError(error)); return; }
+      allBids.push(row);
+      sb.functions.invoke('send-ot-push', { body: { title: 'VOT bid', body: meOp.name + ' bid on coverage' } }).catch(() => {});
+      banner(true, 'Bid submitted');
+      render();
+    });
+    document.querySelectorAll('.deny-vot').forEach(b => b.onclick = async () => {
+      const { error } = await sb.from('ot_posts').update({ status: 'denied' }).eq('id', b.dataset.id);
+      if (error) { banner(false, 'Not denied: ' + explainError(error)); return; }
+      posts = posts.map(p => p.id === b.dataset.id ? { ...p, status: 'denied' } : p);
+      banner(true, 'Request denied');
+      render();
+    });
+    async function awardVot(id, name) {
+      const post = posts.find(p => p.id === id);
+      const { error } = await sb.from('ot_posts').update({ status: 'awarded', awarded_name: name }).eq('id', id);
+      if (error) { banner(false, 'Not awarded: ' + explainError(error)); return; }
+      const rows = (post.dates||[]).map(date => ({ org_id: orgId, user_id: ctx.session.user.id, operator_name: name, work_date: date, hours: post.hours, note: 'Awarded VOT', reason: 'Awarded VOT' }));
+      if (rows.length) await sb.from('overtime_entries').insert(rows);
+      posts = posts.map(p => p.id === id ? { ...p, status: 'awarded', awarded_name: name } : p);
+      banner(true, 'Awarded to ' + name);
+      render();
+    }
+    document.querySelectorAll('.award-vot').forEach(b => b.onclick = () => awardVot(b.dataset.id, b.dataset.name));
+    document.querySelectorAll('.lowest-vot').forEach(b => b.onclick = async () => {
+      const names = allBids.filter(x => x.post_id === b.dataset.id).map(x => x.operator_name);
+      if (!names.length) { banner(false, 'No bids yet'); return; }
+      const year = new Date().getFullYear();
+      const { data } = await sb.from('overtime_entries').select('operator_name, hours, work_date').eq('org_id', orgId);
+      const totals = {};
+      (data||[]).forEach(e => { if ((e.work_date||'').startsWith(String(year))) totals[(e.operator_name||'').toLowerCase()] = (totals[(e.operator_name||'').toLowerCase()]||0) + (+e.hours||0); });
+      awardVot(b.dataset.id, names.slice().sort((a,c)=>(totals[a.toLowerCase()]||0)-(totals[c.toLowerCase()]||0))[0]);
+    });
+  }
+  render();
+}
+
 // ---- Overtime ----
 async function initOvertime() {
   loadNavbar('overtime');
@@ -1485,15 +1895,14 @@ async function initOvertime() {
       const rows = names.map(name => {
         const mine = yearEntries.filter(e => e.name.toLowerCase() === name.toLowerCase());
         const hours = mine.reduce((s, e) => s + e.hours, 0);
-        return { name, hours, count: mine.length };
+        return { name, hours };
       }).sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name));
       const crewTotal = rows.reduce((s, r) => s + r.hours, 0);
       const body = rows.map(r => `
         <tr>
           <td>${r.name}</td>
-          <td>${r.count}</td>
           <td class="num">${r.hours.toFixed(1)}</td>
-        </tr>`).join('') || '<tr><td colspan="3" style="color:#94a3b8">No operators</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="2" style="color:#94a3b8">No operators</td></tr>';
       return `
         <div class="panel ot-sheet">
           <div class="vac-top">
@@ -1501,17 +1910,11 @@ async function initOvertime() {
             <span class="chip">${crewTotal.toFixed(1)}h</span>
           </div>
           <table class="ot-table">
-            <thead><tr><th>Operator</th><th>Entries</th><th>Hours</th></tr></thead>
+            <thead><tr><th>Operator</th><th>Hours</th></tr></thead>
             <tbody>${body}</tbody>
           </table>
         </div>`;
     }).join('') || '<p style="color:#94a3b8">No crews yet.</p>';
-    const names = operators.map(o => `<option>${o.name}</option>`).join('');
-    const recent = yearEntries.slice(0, 8).map(e => `
-      <div class="row">
-        <span>${e.date} · ${e.name}<br><span style="color:#94a3b8;font-size:12px">${crewOf(e.name)}${e.note ? ' · ' + e.note : ''}</span></span>
-        <span>${e.hours}h ${canEdit ? `<button type="button" class="secondary del-ot" data-id="${e.id}" style="width:auto;padding:4px 8px;font-size:12px">×</button>` : ''}</span>
-      </div>`).join('') || '<p style="color:#94a3b8;font-size:13px">No entries this year.</p>';
     app.innerHTML = `
       <p class="role">${ctx.current.organizations?.name||''}</p>
       <h1>Overtime</h1>
@@ -1522,10 +1925,6 @@ async function initOvertime() {
       </div>
       <p class="hint">Plant total ${grand.toFixed(1)}h</p>
       ${sheets}
-      <div class="panel">
-        <h2 style="margin-top:0">Recent</h2>
-        ${recent}
-      </div>
     `;
     document.getElementById('ot-prev').onclick = () => { year -= 1; render(); };
     document.getElementById('ot-next').onclick = () => { year += 1; render(); };
