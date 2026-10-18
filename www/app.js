@@ -548,7 +548,7 @@ async function initSchedule() {
   const areas = await loadAreas(orgId);
   const quals = await loadQuals(orgId);
   let dayAreas = await loadAssignments(orgId);
-  const { data: otPostRows } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name').eq('org_id', orgId).eq('status', 'open');
+  const { data: otPostRows } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name, shift').eq('org_id', orgId).eq('status', 'open');
   let otPosts = otPostRows || [];
   const { data: otBidRows } = otPosts.length
     ? await sb.from('ot_bids').select('id, post_id, operator_name').in('post_id', otPosts.map(p => p.id))
@@ -561,6 +561,7 @@ async function initSchedule() {
   let viewDate = new Date();
   let dragging = false;
   let sheet = null; // null | menu | vacation | edit
+  let editingPost = null;
 
   function crewOnDate(name, date) {
     const data = applied[name];
@@ -618,7 +619,7 @@ async function initSchedule() {
       const vacCls = vac.length ? ' has-vac' : '';
       const vacBadge = vac.length ? `<span class="vac-dot" title="${vac.length} on vacation"></span>` : '';
       const cover = otPosts.find(p => (p.dates||[]).includes(date));
-      const otBadge = cover ? `<span class="ot-mark" title="${cover.kind==='vot'?'Volunteer overtime':'Overtime coverage'}">${cover.kind==='vot'?'VOT':'OT'}</span>` : '';
+      const otBadge = cover ? `<span class="ot-mark${cover.kind==='vot'?' vot':''}" title="${cover.kind==='vot'?'Volunteer overtime':'Overtime coverage'}">${cover.kind==='vot'?'VOT':'OT'}</span>` : '';
       cells += `<div class="cal-day${sel}${today}${vacCls}${cover?' has-ot':''}" data-date="${date}"><span class="n">${d}</span><span class="crews">${crewLabel}</span>${vacBadge}${otBadge}</div>`;
     }
 
@@ -698,13 +699,14 @@ async function initSchedule() {
     const vacCards = monthVac.map(v => {
       const active = dayVac.some(x => x.id === v.id);
       return `
-        <div class="vac-card${active?' active':''}">
+        <div class="vac-card feed-item feed-vac${active?' active':''}">
           <div class="vac-top">
             <strong>${v.name}</strong>
-            <span class="chip vac">${dayCount(v)} day${dayCount(v)===1?'':'s'}</span>
+            <span class="chip">Vacation</span>
           </div>
           <div class="vac-dates">${v.start} → ${v.end}</div>
-          ${active ? '<div class="vac-now">Off on the selected day</div>' : ''}
+          <div class="person-meta">${dayCount(v)} day${dayCount(v)===1?'':'s'}</div>
+          ${(canEdit || (meOp && meOp.name === v.name)) ? `<button type="button" class="secondary cancel-vac" data-id="${v.id}" style="width:auto;margin-top:8px;height:32px;padding:0 10px">Cancel</button>` : ''}
         </div>`;
     }).join('') || '<p style="color:#94a3b8;font-size:13px">No approved vacation this month.</p>';
     const vacPanel = dayVac.length ? dayVac.map(v => `
@@ -714,6 +716,13 @@ async function initSchedule() {
       </div>
     `).join('') : '<p style="color:#94a3b8;font-size:13px">No one is on vacation this day.</p>';
     const upcoming = vacCards;
+    const monthKey = iso(viewDate).slice(0, 7);
+    const coverCards = otPosts.filter(p => (p.dates||[]).some(d => String(d).startsWith(monthKey))).map(p => `
+      <button type="button" class="vac-card feed-item cover-item ${p.kind==='vot'?'feed-vot':'feed-ot'}" data-id="${p.id}">
+        <div class="vac-top"><strong>${p.kind==='vot'?'VOT':'OT'}</strong><span class="chip">${((p.dates||[]).length * (+p.hours||0)).toFixed(1)}h</span></div>
+        <div class="vac-dates">${(p.dates||[]).join(', ')}</div>
+        <div class="person-meta">${(p.shift||'Dayshift') + (p.kind==='vot' ? ' · Requested by ' + (p.requester_name||'Operator') : ' · ' + p.hours + 'h per day')}</div>
+      </button>`).join('');
 
     const dateLabel = dates.length > 1 ? `${dates[0]} → ${dates[dates.length-1]}` : primary;
     const hint = `<p class="hint">Click a day or drag a set.</p>`;
@@ -789,11 +798,31 @@ async function initSchedule() {
           <p class="role">Request VOT</p>
           <h2>${dateLabel}</h2>
           <p class="hint">This posts the selected days for other operators to bid on.</p>
+          <label>Shift</label>
+          <select id="vot-shift"><option>Dayshift</option><option>Nightshift</option></select>
           <label>Hours per day</label>
           <input id="vot-hours" type="number" min="0.5" step="0.5" value="12" />
           <label>Note</label>
           <input id="vot-note" placeholder="Optional" />
           <button id="vot-submit">Request coverage</button>
+          <button type="button" class="secondary" id="sheet-back-btn">Back</button>
+        </div>
+      </div>` : sheet === 'cover' ? `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">${(otPosts.find(p => p.id===editingPost)?.kind)==='vot'?'Edit VOT':'Edit overtime'}</p>
+          <h2>${(otPosts.find(p => p.id===editingPost)?.dates||[]).join(', ')}</h2>
+          <label>Shift</label>
+          <select id="cover-shift">
+            <option ${otPosts.find(p => p.id===editingPost)?.shift==='Nightshift'?'':'selected'}>Dayshift</option>
+            <option ${otPosts.find(p => p.id===editingPost)?.shift==='Nightshift'?'selected':''}>Nightshift</option>
+          </select>
+          <label>Hours per day</label>
+          <input id="cover-hours" type="number" min="0.5" step="0.5" value="${otPosts.find(p => p.id===editingPost)?.hours || 12}" />
+          <label>Note</label>
+          <input id="cover-note" value="${otPosts.find(p => p.id===editingPost)?.note || ''}" />
+          <button id="cover-save">Save</button>
+          <button type="button" class="secondary" id="cover-delete">Delete</button>
           <button type="button" class="secondary" id="sheet-back-btn">Back</button>
         </div>
       </div>` : sheet === 'otpost' ? `
@@ -802,6 +831,8 @@ async function initSchedule() {
           <p class="role">Post overtime</p>
           <h2>${dateLabel}</h2>
           <p class="hint">${dates.length > 1 ? 'These days are one coverage for a single operator.' : 'This day is posted on its own.'}</p>
+          <label>Shift</label>
+          <select id="ot-shift"><option>Dayshift</option><option>Nightshift</option></select>
           <label>Hours per day</label>
           <input id="ot-hours" type="number" min="0.5" step="0.5" value="12" />
           <label>Note</label>
@@ -861,13 +892,25 @@ async function initSchedule() {
         <button type="button" class="cal-nav-btn" id="next" aria-label="Next month">›</button>
       </div>
       <div class="cal cal-large" id="cal">${cells}</div>
+      <div class="legend">
+        <span><i class="lg lg-ot"></i>OT</span>
+        <span><i class="lg lg-vot"></i>VOT</span>
+        <span><i class="lg lg-vac"></i>Vacation</span>
+      </div>
       <div class="vac-board">
-        <h2>On vacation · ${viewDate.toLocaleString('default',{month:'long'})}</h2>
-        <div class="vac-list">${vacCards}</div>
+        <h2>${viewDate.toLocaleString('default',{month:'long'})}</h2>
+        <div class="vac-list">${coverCards}${vacCards}</div>
       </div>
       ${sheetHtml}
     `;
 
+    document.getElementById('app').addEventListener('click', (e) => {
+      if (e.target.closest('.cal-day[data-date]') || e.target.closest('.modal') || e.target.closest('.cal-nav') || e.target.closest('.cover-item')) return;
+      if (!selectedDates.size && !sheet) return;
+      selectedDates = new Set();
+      sheet = null;
+      render();
+    });
     document.getElementById('prev').onclick = () => { viewDate.setMonth(viewDate.getMonth()-1); render(); };
     document.getElementById('next').onclick = () => { viewDate.setMonth(viewDate.getMonth()+1); render(); };
     document.querySelectorAll('.crew-tab[data-c]').forEach(b => b.onclick = () => { selected = b.dataset.c; render(); });
@@ -948,6 +991,46 @@ async function initSchedule() {
       if (e.target.id === 'sheet-back') { sheet = null; render(); }
     });
     document.getElementById('sheet-back-btn')?.addEventListener('click', () => { sheet = 'menu'; render(); });
+    document.querySelectorAll('.cancel-vac').forEach(b => b.onclick = async (e) => {
+      e.stopPropagation();
+      const vac = vacations.find(v => v.id === b.dataset.id);
+      if (!vac) return;
+      if (!canEdit && vac.name !== meOp?.name) { banner(false, 'No permission'); return; }
+      const { error } = await sb.from('vacation_requests').delete().eq('id', vac.id);
+      if (error) { banner(false, 'Not cancelled: ' + explainError(error)); return; }
+      const i = vacations.findIndex(v => v.id === vac.id);
+      if (i >= 0) vacations.splice(i, 1);
+      banner(true, 'Vacation cancelled');
+      render();
+    });
+    document.querySelectorAll('.cover-item').forEach(b => b.onclick = () => {
+      if (!canEdit) { banner(false, 'No permission'); return; }
+      editingPost = b.dataset.id;
+      sheet = 'cover';
+      render();
+    });
+    document.getElementById('cover-save')?.addEventListener('click', async () => {
+      if (!canEdit || !editingPost) { banner(false, 'No permission'); return; }
+      const hours = +document.getElementById('cover-hours').value || 12;
+      const note = document.getElementById('cover-note').value.trim();
+      const shift = document.getElementById('cover-shift').value;
+      const { error } = await sb.from('ot_posts').update({ hours, note, shift }).eq('id', editingPost);
+      if (error) { banner(false, 'Not saved: ' + explainError(error)); return; }
+      const post = otPosts.find(p => p.id === editingPost);
+      if (post) { post.hours = hours; post.note = note; post.shift = shift; }
+      banner(true, 'Updated');
+      sheet = null;
+      render();
+    });
+    document.getElementById('cover-delete')?.addEventListener('click', async () => {
+      if (!canEdit || !editingPost) { banner(false, 'No permission'); return; }
+      const { error } = await sb.from('ot_posts').delete().eq('id', editingPost);
+      if (error) { banner(false, 'Not deleted: ' + explainError(error)); return; }
+      otPosts = otPosts.filter(p => p.id !== editingPost);
+      banner(true, 'Deleted');
+      sheet = null;
+      render();
+    });
     document.getElementById('opt-view')?.addEventListener('click', () => { sheet = 'view'; render(); });
     document.getElementById('opt-vac')?.addEventListener('click', () => { sheet = 'vacation'; render(); });
     document.getElementById('edit-crew-pick')?.addEventListener('change', (e) => { selected = e.target.value; render(); });
@@ -956,10 +1039,11 @@ async function initSchedule() {
       if (!meOp?.name) { banner(false, 'No operator profile'); return; }
       const hours = +document.getElementById('vot-hours').value || 12;
       const note = document.getElementById('vot-note').value.trim();
+      const shift = document.getElementById('vot-shift').value;
       const { data: row, error } = await sb.from('ot_posts').insert({
-        org_id: orgId, dates: sortedDates(), hours, note, kind: 'vot',
+        org_id: orgId, dates: sortedDates(), hours, note, shift, kind: 'vot',
         requester_name: meOp.name, created_by: ctx.session.user.id
-      }).select('id, dates, hours, note, status, kind, requester_name').single();
+      }).select('id, dates, hours, note, status, kind, requester_name, shift').single();
       if (error) { banner(false, 'VOT not requested: ' + explainError(error)); return; }
       otPosts.unshift(row);
       sb.functions.invoke('send-ot-push', { body: { title: 'VOT requested', body: meOp.name + ' needs coverage', audience: 'all' } }).catch(() => {});
@@ -974,9 +1058,10 @@ async function initSchedule() {
       if (!canEdit) { banner(false, 'No permission'); return; }
       const hours = +document.getElementById('ot-hours').value || 12;
       const note = document.getElementById('ot-note').value.trim();
+      const shift = document.getElementById('ot-shift').value;
       const { data: row, error } = await sb.from('ot_posts').insert({
-        org_id: orgId, dates: sortedDates(), hours, note, created_by: ctx.session.user.id
-      }).select('id, dates, hours, note, status').single();
+        org_id: orgId, dates: sortedDates(), hours, note, shift, created_by: ctx.session.user.id
+      }).select('id, dates, hours, note, status, shift').single();
       if (error) { banner(false, 'Overtime not posted: ' + explainError(error)); return; }
       otPosts.unshift(row);
       sb.functions.invoke('send-ot-push', { body: { title: 'Overtime posted', body: sortedDates().join(', ') } }).catch(() => {});
@@ -1711,7 +1796,7 @@ async function initSettings() {
 
 // ---- Stats ----
 async function initGraph() { return initStats(); }
-async function initStats() {
+async function initStats() { window.initStats = initStats; window.initGraph = initGraph;
   loadNavbar('graph');
   const ctx = await requirePlant();
   if (!ctx) return;
@@ -1722,8 +1807,10 @@ async function initStats() {
   const { data, error } = await sb.from('overtime_entries').select('operator_name, work_date, hours').eq('org_id', orgId);
   if (error) banner(false, 'Stats not loaded: ' + explainError(error));
   const entries = data || [];
-  const { data: assigns } = await sb.from('assignments').select('work_date, area_id, is_float').eq('org_id', orgId);
+  const { data: assigns } = await sb.from('assignments').select('work_date, operator_id, area_id, is_float').eq('org_id', orgId);
+  const { data: votRows } = await sb.from('ot_posts').select('dates, hours, requester_name, kind, status').eq('org_id', orgId).eq('kind', 'vot');
   let year = new Date().getFullYear();
+  let person = operators[0]?.id || '';
   function crewOf(name) {
     const op = operators.find(o => (o.name||'').toLowerCase() === (name||'').toLowerCase());
     return op?.crew || 'Unassigned';
@@ -1737,28 +1824,42 @@ async function initStats() {
         <div class="bar-hours">${typeof value === 'number' && unit === 'h' ? value.toFixed(1) : value}${unit}</div>
       </div>`).join('') || '<p style="color:#94a3b8">Nothing this year.</p>';
   }
+  function pie(list) {
+    const total = list.reduce((s, x) => s + x[1], 0) || 1;
+    const colors = ['#12b76a','#2e90fa','#f59e0b','#7a5af8','#f04438','#667085'];
+    let acc = 0;
+    const stops = list.map((x, i) => {
+      const start = acc; acc += x[1] / total * 100;
+      return colors[i % colors.length] + ' ' + start.toFixed(1) + '% ' + acc.toFixed(1) + '%';
+    }).join(', ');
+    const legend = list.map((x, i) => `<span><i style="background:${colors[i % colors.length]}"></i>${x[0]} ${x[1]}</span>`).join('');
+    return `<div class="pie-wrap"><div class="pie" style="background:conic-gradient(${stops || '#e5e7eb 0 100%'})"></div><div class="pie-legend">${legend || 'No areas this year.'}</div></div>`;
+  }
   function render() {
     const yearEntries = entries.filter(e => (e.work_date||'').startsWith(String(year)));
     const total = yearEntries.reduce((s, e) => s + (+e.hours||0), 0);
     const byCrew = {};
-    yearEntries.forEach(e => {
-      const crew = crewOf(e.operator_name);
-      byCrew[crew] = (byCrew[crew]||0) + (+e.hours||0);
-    });
+    yearEntries.forEach(e => { const crew = crewOf(e.operator_name); byCrew[crew] = (byCrew[crew]||0) + (+e.hours||0); });
     const crewList = Object.entries(byCrew).sort((a,b) => b[1]-a[1]);
-    const areaName = id => areas.find(a => a.id === id)?.name || 'Float';
-    const byArea = {};
-    (assigns||[]).filter(a => (a.work_date||'').startsWith(String(year)) && !a.is_float && a.area_id).forEach(a => {
-      const name = areaName(a.area_id);
-      byArea[name] = (byArea[name]||0) + 1;
-    });
-    const areaList = Object.entries(byArea).sort((a,b) => b[1]-a[1]);
     const byPerson = {};
-    yearEntries.forEach(e => {
-      const name = e.operator_name || 'Operator';
-      byPerson[name] = (byPerson[name]||0) + (+e.hours||0);
-    });
+    yearEntries.forEach(e => { const name = e.operator_name || 'Operator'; byPerson[name] = (byPerson[name]||0) + (+e.hours||0); });
     const people = Object.entries(byPerson).sort((a,b) => b[1]-a[1]).slice(0, 8);
+    const votByCrew = {};
+    (votRows||[]).forEach(p => {
+      const inYear = (p.dates||[]).filter(d => String(d).startsWith(String(year)));
+      if (!inYear.length) return;
+      const crew = crewOf(p.requester_name);
+      votByCrew[crew] = (votByCrew[crew]||0) + inYear.length * (+p.hours||0);
+    });
+    const votList = Object.entries(votByCrew).sort((a,b) => b[1]-a[1]);
+    const op = operators.find(o => o.id === person) || operators[0];
+    const areaName = id => areas.find(a => a.id === id)?.name || 'Area';
+    const mine = {};
+    (assigns||[]).filter(a => a.operator_id === op?.id && (a.work_date||'').startsWith(String(year)) && !a.is_float && a.area_id).forEach(a => {
+      const name = areaName(a.area_id);
+      mine[name] = (mine[name]||0) + 1;
+    });
+    const areaList = Object.entries(mine).sort((a,b) => b[1]-a[1]);
     app.innerHTML = `
       <p class="role">${ctx.current.organizations?.name||''}</p>
       <h1>Stats</h1>
@@ -1770,14 +1871,21 @@ async function initStats() {
       <div class="stat-grid">
         <div class="stat"><span>Plant OT</span><strong>${total.toFixed(1)}h</strong></div>
         <div class="stat"><span>Crews</span><strong>${crewList.length}</strong></div>
-        <div class="stat"><span>Area days</span><strong>${areaList.reduce((s,x)=>s+x[1],0)}</strong></div>
+        <div class="stat"><span>VOT hours</span><strong>${votList.reduce((s,x)=>s+x[1],0).toFixed(1)}h</strong></div>
       </div>
       <div class="panel"><h2 style="margin-top:0">Overtime by crew</h2>${bars(crewList, 'h')}</div>
-      <div class="panel"><h2 style="margin-top:0">Areas worked</h2>${bars(areaList, '')}</div>
+      <div class="panel"><h2 style="margin-top:0">VOT by crew</h2>${bars(votList, 'h')}</div>
       <div class="panel"><h2 style="margin-top:0">Top overtime</h2>${bars(people, 'h')}</div>
+      <div class="panel">
+        <h2 style="margin-top:0">Areas worked</h2>
+        <label>Operator</label>
+        <select id="stat-person">${operators.map(o => `<option value="${o.id}" ${o.id===op?.id?'selected':''}>${o.name}</option>`).join('')}</select>
+        ${pie(areaList)}
+      </div>
     `;
     document.getElementById('g-prev').onclick = () => { year -= 1; render(); };
     document.getElementById('g-next').onclick = () => { year += 1; render(); };
+    document.getElementById('stat-person').onchange = (e) => { person = e.target.value; render(); };
   }
   render();
 }
