@@ -588,18 +588,19 @@ body.is-app .app > p.logged-line {
   margin-left: 8px;
   width: 36px;
   height: 36px;
-  border: none;
+  padding: 0;
   border-radius: 10px;
-  background: #16a34a;
-  color: #fff;
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  color: #16a34a;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(22,163,74,.35);
-  transition: background .15s, transform .1s;
+  transition: background .15s, transform .12s;
 }
 .cal-title .ss-inline:hover {
-  background: #15803d;
+  background: var(--panel-2);
   transform: scale(1.05);
 }
 .cal-title .ss-inline svg {
   display: block;
+  stroke: #16a34a;
 }

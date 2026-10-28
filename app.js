@@ -1177,7 +1177,7 @@ async function initSchedule() {
 
       <div class="cal-nav">
         <button type="button" class="cal-nav-btn" id="prev" aria-label="Previous month">‹</button>
-        <strong class="cal-title">${viewDate.toLocaleString('default',{month:'long',year:'numeric'})}${canEdit ? ` <button type="button" class="ss-inline" id="spreadsheet-btn" aria-label="Spreadsheet edit" title="Edit month in spreadsheet"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></button>` : ''}</strong>
+        <strong class="cal-title">${viewDate.toLocaleString('default',{month:'long',year:'numeric'})}${canEdit ? ` <button type="button" class="ss-inline" id="spreadsheet-btn" aria-label="Spreadsheet edit" title="Edit month in spreadsheet"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></button>` : ''}</strong>
         <button type="button" class="cal-nav-btn" id="next" aria-label="Next month">›</button>
       </div>
       <div class="cal cal-large" id="cal">${cells}</div>
@@ -2360,6 +2360,9 @@ async function initOvertime() {
   const { data, error } = await sb.from('overtime_entries').select('id, operator_name, work_date, hours, note, reason').eq('org_id', orgId).order('work_date', { ascending: false });
   if (error) banner(false, 'Overtime not loaded: ' + explainError(error));
   let entries = (data || []).map(r => ({ id: r.id, name: r.operator_name || 'Operator', date: r.work_date, hours: +r.hours || 0, note: r.note || r.reason || '' }));
+  // Awarded posts count as scheduled future OT (if not already in entries)
+  const { data: awarded } = await sb.from('ot_posts').select('awarded_name, dates, hours, status').eq('org_id', orgId).eq('status', 'awarded');
+  const today = iso(new Date());
   let year = new Date().getFullYear();
 
   function crewOf(name) {
@@ -2371,30 +2374,52 @@ async function initOvertime() {
     const yearEntries = entries.filter(e => (e.date||'').startsWith(String(year)));
     const crews = [...new Set(operators.map(o => o.crew).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
     if (yearEntries.some(e => crewOf(e.name) === 'Unassigned')) crews.push('Unassigned');
-    const grand = yearEntries.reduce((s, e) => s + e.hours, 0);
+
+    // Future scheduled hours from awarded posts not already recorded as entries
+    const futureFromPosts = {};
+    (awarded || []).forEach(p => {
+      const name = (p.awarded_name || '').toLowerCase();
+      if (!name) return;
+      (p.dates || []).forEach(d => {
+        if (!String(d).startsWith(String(year)) || d <= today) return;
+        const already = yearEntries.some(e => e.name.toLowerCase() === name && e.date === d);
+        if (!already) futureFromPosts[name] = (futureFromPosts[name] || 0) + (+p.hours || 0);
+      });
+    });
+
+    const grandWorked = yearEntries.filter(e => e.date <= today).reduce((s, e) => s + e.hours, 0);
+    const grandFuture = yearEntries.filter(e => e.date > today).reduce((s, e) => s + e.hours, 0)
+      + Object.values(futureFromPosts).reduce((s, h) => s + h, 0);
+    const grandScheduled = grandWorked + grandFuture;
+
     const sheets = crews.map(crew => {
       const names = crew === 'Unassigned'
         ? [...new Set(yearEntries.filter(e => crewOf(e.name) === 'Unassigned').map(e => e.name))]
         : operators.filter(o => o.crew === crew).map(o => o.name);
       const rows = names.map(name => {
         const mine = yearEntries.filter(e => e.name.toLowerCase() === name.toLowerCase());
-        const hours = mine.reduce((s, e) => s + e.hours, 0);
-        return { name, hours };
-      }).sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name));
-      const crewTotal = rows.reduce((s, r) => s + r.hours, 0);
+        const worked = mine.filter(e => e.date <= today).reduce((s, e) => s + e.hours, 0);
+        const futureEntries = mine.filter(e => e.date > today).reduce((s, e) => s + e.hours, 0);
+        const futurePosts = futureFromPosts[name.toLowerCase()] || 0;
+        const scheduled = worked + futureEntries + futurePosts;
+        return { name, worked, scheduled };
+      }).sort((a, b) => b.scheduled - a.scheduled || a.name.localeCompare(b.name));
+      const crewWorked = rows.reduce((s, r) => s + r.worked, 0);
+      const crewScheduled = rows.reduce((s, r) => s + r.scheduled, 0);
       const body = rows.map(r => `
         <tr>
           <td>${r.name}</td>
-          <td class="num">${r.hours.toFixed(1)}</td>
-        </tr>`).join('') || '<tr><td colspan="2" style="color:#94a3b8">No operators</td></tr>';
+          <td class="num">${r.worked.toFixed(1)}</td>
+          <td class="num">${r.scheduled.toFixed(1)}</td>
+        </tr>`).join('') || '<tr><td colspan="3" style="color:#94a3b8">No operators</td></tr>';
       return `
         <div class="panel ot-sheet">
           <div class="vac-top">
             <h2 style="margin:0">${crew}</h2>
-            <span class="chip">${crewTotal.toFixed(1)}h</span>
+            <span class="chip">${crewScheduled.toFixed(1)}h</span>
           </div>
           <table class="ot-table">
-            <thead><tr><th>Operator</th><th>Hours</th></tr></thead>
+            <thead><tr><th>Operator</th><th>Worked</th><th>Scheduled</th></tr></thead>
             <tbody>${body}</tbody>
           </table>
         </div>`;
@@ -2407,7 +2432,7 @@ async function initOvertime() {
         <strong class="cal-title">${year}</strong>
         <button type="button" class="cal-nav-btn" id="ot-next" aria-label="Next year">›</button>
       </div>
-      <p class="hint">Plant total ${grand.toFixed(1)}h</p>
+      <p class="hint">Worked ${grandWorked.toFixed(1)}h · Scheduled ${grandScheduled.toFixed(1)}h</p>
       ${sheets}
     `;
     document.getElementById('ot-prev').onclick = () => { year -= 1; render(); };
