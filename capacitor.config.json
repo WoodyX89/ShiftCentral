@@ -2,6 +2,13 @@
   "appId": "com.shiftcentral.app",
   "appName": "ShiftCentral",
   "webDir": "www",
+  "plugins": {
+  "SplashScreen": {
+    "launchShowDuration": 1500,
+    "launchAutoHide": true,
+    "backgroundColor": "#E7E7EA"
+  }
+  },
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",

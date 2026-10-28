@@ -5,16 +5,19 @@
   "scripts": {
     "cap:sync": "mkdir -p www && cp -f *.html app.js style.css logo.png manifest.webmanifest navbar.html www/ && npx cap sync",
     "cap:ios": "npm run cap:sync && npx cap open ios",
-    "cap:android": "npx cap sync && npx cap open android"
+    "cap:android": "npx cap sync && npx cap open android",
+    "sync": "mkdir -p www && cp app.js style.css *.html logo.png manifest.webmanifest navbar.html www/ && npx cap sync ios"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7.4.3",
-    "@capacitor/core": "^7.4.3"
+    "@capacitor/cli": "^8.0.0",
+    "@capacitor/core": "^8.0.0"
   },
   "dependencies": {
-    "@capacitor/app": "^7.0.1",
-    "@capacitor/ios": "^7.6.9",
-    "@capacitor/status-bar": "^7.0.1",
-    "@capacitor/push-notifications": "^7.0.0"
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@capacitor/push-notifications": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
+    "@capgo/capacitor-native-biometric": "^7.6.0"
   }
 }

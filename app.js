@@ -64,19 +64,28 @@ async function loadNavbar(active) {
 }
 
 async function registerPush() {
-  if (!window.Capacitor?.Plugins?.PushNotifications) return;
+  if (!window.Capacitor?.Plugins?.PushNotifications || window.__scPushReady) return;
+  window.__scPushReady = true;
   try {
     const Push = window.Capacitor.Plugins.PushNotifications;
+    await Push.addListener('registration', async (token) => {
+      if (!token?.value) return;
+      window.__scPushToken = token.value;
+      for (let i = 0; i < 5; i++) {
+        const session = await getSession();
+        if (session) {
+          const { error } = await sb.from('device_tokens').upsert({
+            user_id: session.user.id, org_id: getSavedOrg() || null, token: token.value, platform: 'ios'
+          }, { onConflict: 'token' });
+          if (!error) return;
+        }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    });
+    await Push.addListener('registrationError', () => {});
     const perm = await Push.requestPermissions();
     if (perm.receive !== 'granted') return;
     await Push.register();
-    Push.addListener('registration', async (token) => {
-      const session = await getSession();
-      if (!session || !token?.value) return;
-      await sb.from('device_tokens').upsert({
-        user_id: session.user.id, token: token.value, platform: 'ios'
-      }, { onConflict: 'token' });
-    });
   } catch (e) {}
 }
 
@@ -93,25 +102,38 @@ async function loadNotifications() {
   const { data: ops } = await sb.from('operators').select('name, email, role').eq('org_id', current.org_id);
   const meEmail = (session.user.email || '').toLowerCase();
   const me = (ops || []).find(o => (o.email||'').toLowerCase() === meEmail);
-  const isLead = me ? ['supervisor', 'admin'].includes(me.role) : canSchedule(current.role);
+  const isLead = me ? ['owner', 'supervisor', 'admin'].includes(me.role) : canSchedule(current.role);
   if (!isLead && me && !['supervisor', 'admin'].includes(me.role) && !me) { /* keep going */ }
-  const seenKey = 'sc_seen_notes_' + current.org_id;
-  const seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+
+  // Load dismissed note IDs from database (persists across logins)
+  let seen = new Set();
+  try {
+    const { data: dismissed } = await sb.from('dismissed_notifications')
+      .select('note_id')
+      .eq('user_id', session.user.id)
+      .eq('org_id', current.org_id);
+    if (dismissed) dismissed.forEach(d => seen.add(d.note_id));
+  } catch (e) {
+    // Fallback to localStorage if table doesn't exist yet
+    const seenKey = 'sc_seen_notes_' + current.org_id;
+    seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+  }
+
   let notes = [];
   if (isLead) {
     const { data } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', current.org_id).eq('status', 'requested').order('created_at', { ascending: false });
     notes = (data || []).map(n => ({ id: 'vac-'+n.id, title: n.name + ' requested vacation', detail: n.start_date + ' → ' + n.end_date, href: 'schedule.html' }));
     const { data: posts } = await sb.from('ot_posts').select('id, dates, hours, kind, requester_name').eq('org_id', current.org_id).eq('status', 'open');
-    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime bids open', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html' })));
+    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime bids open', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html?post=' + p.id })));
     const { data: bids } = await sb.from('ot_bids').select('id, operator_name, post_id, created_at').eq('org_id', current.org_id).order('created_at', { ascending: false }).limit(20);
-    notes = notes.concat((bids||[]).map(b => ({ id: 'bid-'+b.id, title: b.operator_name + ' bid on overtime', detail: 'Review and award', href: 'schedule.html' })));
+    notes = notes.concat((bids||[]).map(b => ({ id: 'bid-'+b.id, title: b.operator_name + ' bid on overtime', detail: 'Review and award', href: 'schedule.html?post=' + b.post_id })));
   } else {
     if (me?.name) {
       const { data } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', current.org_id).ilike('name', me.name).in('status', ['approved', 'denied']);
       notes = (data || []).map(n => ({ id: 'vac-'+n.id, title: 'Vacation ' + n.status, detail: n.start_date + ' → ' + n.end_date, href: 'schedule.html' }));
     }
     const { data: posts } = await sb.from('ot_posts').select('id, dates, hours, kind, requester_name').eq('org_id', current.org_id).eq('status', 'open');
-    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime posted', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html' })));
+    notes = notes.concat((posts||[]).map(p => ({ id: 'ot-'+p.id, title: p.kind==='vot' ? (p.requester_name||'Operator') + ' requested VOT' : 'Overtime posted', detail: (p.dates||[]).join(', ') + ' · ' + p.hours + 'h', href: 'schedule.html?post=' + p.id })));
   }
   notes = notes.filter(n => !seen.has(n.id));
   btn.hidden = false;
@@ -119,11 +141,19 @@ async function loadNotifications() {
   badge.textContent = notes.length;
   btn.onclick = (e) => {
     e.stopPropagation();
-    openNotes(notes, seenKey, seen);
+    openNotes(notes, current.org_id, session.user.id, seen);
   };
+  if (!window.__scNotesLive) {
+    window.__scNotesLive = true;
+    sb.channel('sc-notes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vacation_requests' }, () => loadNotifications())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ot_posts' }, () => loadNotifications())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ot_bids' }, () => loadNotifications())
+      .subscribe();
+  }
 }
 
-function openNotes(notes, seenKey, seen) {
+function openNotes(notes, orgId, userId, seen) {
   document.getElementById('note-modal')?.remove();
   const box = document.createElement('div');
   box.id = 'note-modal';
@@ -140,21 +170,107 @@ function openNotes(notes, seenKey, seen) {
       <button type="button" class="secondary" id="note-close">Close</button>
     </div>`;
   document.body.appendChild(box);
-  box.querySelector('#note-close').onclick = () => box.remove();
-  box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
-  box.querySelector('#note-clear').onclick = () => {
-    notes.forEach(n => seen.add(n.id));
-    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+  setModalOpen(true);
+  box.querySelector('#note-close').onclick = () => { setModalOpen(false); box.remove(); };
+  box.addEventListener('click', (e) => { if (e.target === box) { setModalOpen(false); box.remove(); } });
+
+  async function dismiss(ids) {
+    if (!ids.length) return;
+    const rows = ids.map(note_id => ({ user_id: userId, org_id: orgId, note_id }));
+    try {
+      await sb.from('dismissed_notifications').upsert(rows, { onConflict: 'user_id,org_id,note_id' });
+    } catch (e) {
+      // Fallback: still mark locally so it feels dismissed in this session
+      const seenKey = 'sc_seen_notes_' + orgId;
+      const local = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]'));
+      ids.forEach(id => local.add(id));
+      localStorage.setItem(seenKey, JSON.stringify([...local]));
+    }
+    ids.forEach(id => seen.add(id));
+  }
+
+  box.querySelector('#note-clear').onclick = async () => {
+    await dismiss(notes.map(n => n.id));
     box.remove();
     loadNotifications();
   };
-  box.querySelectorAll('.note-go').forEach(b => b.onclick = () => {
-    seen.add(b.dataset.id);
-    localStorage.setItem(seenKey, JSON.stringify([...seen]));
+  box.querySelectorAll('.note-go').forEach(b => b.onclick = async () => {
+    await dismiss([b.dataset.id]);
     location.href = b.dataset.href;
   });
 }
 
+
+
+function setModalOpen(open) {
+  const html = document.documentElement;
+  const body = document.body;
+  if (open) {
+    if (!body.classList.contains('modal-open')) {
+      window.__scScrollY = window.scrollY || window.pageYOffset || 0;
+      body.style.setProperty('position', 'fixed', 'important');
+      body.style.top = '-' + window.__scScrollY + 'px';
+      body.style.left = '0';
+      body.style.right = '0';
+      body.style.width = '100%';
+      body.style.overflow = 'hidden';
+    }
+    html.classList.add('modal-open');
+    body.classList.add('modal-open');
+    if (!window.__scModalTouch) {
+      window.__scModalTouch = (e) => {
+        if (!e.target.closest('.modal')) e.preventDefault();
+      };
+      document.addEventListener('touchmove', window.__scModalTouch, { passive: false });
+    }
+    setTimeout(updateScrollHints, 30);
+  } else {
+    html.classList.remove('modal-open');
+    body.classList.remove('modal-open');
+    body.style.removeProperty('position');
+    body.style.top = '';
+    body.style.left = '';
+    body.style.right = '';
+    body.style.width = '';
+    body.style.overflow = '';
+    if (window.__scScrollY != null) {
+      window.scrollTo(0, window.__scScrollY);
+      window.__scScrollY = null;
+    }
+    if (window.__scModalTouch) {
+      document.removeEventListener('touchmove', window.__scModalTouch);
+      window.__scModalTouch = null;
+    }
+  }
+}
+
+// Automatically lock/unlock whenever any .modal-back appears or disappears
+(function installModalObserver() {
+  if (window.__scModalObserver) return;
+  const check = () => {
+    const open = !!document.querySelector('.modal-back');
+    setModalOpen(open);
+  };
+  window.__scModalObserver = new MutationObserver(check);
+  window.__scModalObserver.observe(document.body, { childList: true, subtree: true });
+  // initial check
+  setTimeout(check, 100);
+})();
+function updateScrollHints() {
+  document.querySelectorAll('.modal').forEach(m => {
+    const needs = m.scrollHeight > m.clientHeight + 8;
+    m.classList.toggle('scrollable', needs);
+    let hint = m.querySelector('.scroll-hint');
+    if (needs && !hint) {
+      hint = document.createElement('div');
+      hint.className = 'scroll-hint';
+      hint.textContent = 'Scroll for more';
+      m.appendChild(hint);
+    } else if (!needs && hint) {
+      hint.remove();
+    }
+  });
+}
 
 function iso(d) {
   if (!(d instanceof Date) || isNaN(d.getTime())) return '';
@@ -209,6 +325,7 @@ async function loadMemberships() {
 function getSavedOrg() { return localStorage.getItem('shiftcentral_org_id'); }
 function setSavedOrg(id) { localStorage.setItem('shiftcentral_org_id', id); }
 
+
 async function requireAuth() {
   const session = await getSession();
   if (!session) { location.href = 'index.html'; return null; }
@@ -221,7 +338,7 @@ async function requirePlant() {
   const memberships = await loadMemberships();
   const saved = getSavedOrg();
   const current = memberships.find(m => m.org_id === saved) || memberships[0];
-  if (!current) { location.href = 'index.html'; return null; }
+  if (!current) { location.href = 'noplant.html'; return null; }
   setSavedOrg(current.org_id);
   return { session, memberships, current };
 }
@@ -302,7 +419,11 @@ function expandSequence(seq, startDate, count) {
 
 async function initLanding() {
   const session = await getSession();
-  if (session) { location.href = 'schedule.html'; return; }
+  if (session) {
+    const ms = await loadMemberships();
+    location.href = ms.length ? 'schedule.html' : 'home.html';
+    return;
+  }
   document.getElementById('app').innerHTML = `
     <div class="landing">
       <img src="logo.png" class="landing-logo" alt="ShiftCentral" />
@@ -314,6 +435,43 @@ async function initLanding() {
       <p class="auth-links"><a href="login.html?mode=forgot">Forgot password</a></p>
     </div>
   `;
+}
+
+
+async function initNoPlant() {
+  const session = await requireAuth();
+  if (!session) return;
+  const ms = await loadMemberships();
+  if (ms.length) { setSavedOrg(ms[0].org_id); location.href = 'schedule.html'; return; }
+  document.getElementById('app').innerHTML = `
+    <div class="landing" style="padding-top:12px">
+      <img src="logo.png" class="landing-logo" alt="ShiftCentral" />
+      <h1>You're not on a plant yet</h1>
+      <p class="landing-sub">Contact your shift supervisor or administrator and ask them to add ${session.user.email} to the plant.</p>
+    </div>
+    <div class="panel">
+      <h2 style="margin-top:0">Or create a new plant</h2>
+      <p class="hint">You become the administrator.</p>
+      <label>Plant name</label>
+      <input id="plant-name" placeholder="Plant name" />
+      <button id="create">Create plant</button>
+      <p id="msg" class="error"></p>
+    </div>
+    <button class="secondary" id="out">Sign out</button>
+  `;
+  document.getElementById('create').onclick = async () => {
+    const btn = document.getElementById('create');
+    const name = document.getElementById('plant-name').value.trim();
+    const msg = document.getElementById('msg');
+    if (name.length < 2) { msg.textContent = 'Enter a plant name'; return; }
+    btn.disabled = true;
+    const { error } = await sb.rpc('create_plant', { plant_name: name });
+    btn.disabled = false;
+    if (error) { msg.textContent = error.message; return; }
+    const next = await loadMemberships();
+    if (next.length) { setSavedOrg(next[next.length-1].org_id); location.href = 'schedule.html'; }
+  };
+  document.getElementById('out').onclick = () => sb.auth.signOut().then(() => location.href = 'index.html');
 }
 
 async function initHome() {
@@ -374,7 +532,11 @@ async function initAuth() {
   const params = new URLSearchParams(location.search);
   let mode = params.get('mode') || 'signin';
   const session = await getSession();
-  if (session) { location.href = 'schedule.html'; return; }
+  if (session) {
+    const ms = await loadMemberships();
+    location.href = ms.length ? 'schedule.html' : 'home.html';
+    return;
+  }
 
   function render() {
     const title = mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Reset password' : mode === 'plant' ? 'Sign your plant up' : 'Sign in';
@@ -411,15 +573,18 @@ async function initAuth() {
       }
       if (!password) { msg.textContent = 'Enter a password'; return; }
       if (mode === 'signup') {
-        const { error } = await sb.auth.signUp({ email, password });
-        msg.className = error ? 'error' : 'notice';
-        msg.textContent = error ? error.message : 'Account created. Check your email to confirm, then sign in.';
+        const { data, error } = await sb.auth.signUp({ email, password });
+        if (error) { msg.textContent = error.message; return; }
+        if (data.session) { location.href = 'noplant.html'; return; }
+        msg.className = 'notice';
+        msg.textContent = 'Account created. Check your email to confirm, then sign in.';
         return;
       }
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) { msg.textContent = error.message; return; }
       await acceptPendingInvites();
-      location.href = 'schedule.html';
+      const ms = await loadMemberships();
+      location.href = ms.length ? 'schedule.html' : 'home.html';
     };
   }
   render();
@@ -543,25 +708,43 @@ async function initSchedule() {
   const meOp = operators.find(o => (o.email||'').toLowerCase() === meEmail)
     || operators.find(o => meEmail && (o.name||'').toLowerCase() && meEmail.includes((o.name||'').toLowerCase()));
   const myCrewOps = meOp?.crew ? operators.filter(o => o.crew === meOp.crew) : (meOp ? [meOp] : []);
+  const isAdmin = meOp ? meOp.role === 'admin' : ['owner','admin'].includes(ctx.current.role);
   const canEdit = meOp ? ['supervisor', 'admin'].includes(meOp.role) : canSchedule(ctx.current.role);
   const canBook = canEdit;
   const areas = await loadAreas(orgId);
   const quals = await loadQuals(orgId);
   let dayAreas = await loadAssignments(orgId);
-  const { data: otPostRows } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name, shift').eq('org_id', orgId).eq('status', 'open');
+  const { data: otPostRows } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name, shift, created_by').eq('org_id', orgId).eq('status', 'open');
   let otPosts = otPostRows || [];
   const { data: otBidRows } = otPosts.length
     ? await sb.from('ot_bids').select('id, post_id, operator_name').in('post_id', otPosts.map(p => p.id))
     : { data: [] };
   let otBids = otBidRows || [];
+  const { data: otEntryRows } = await sb.from('overtime_entries').select('operator_name, work_date').eq('org_id', orgId);
+  const otEntries = otEntryRows || [];
   const { data: vacRows } = await sb.from('vacation_requests').select('id, name, start_date, end_date, status').eq('org_id', orgId).eq('status', 'approved');
   const vacations = (vacRows || []).map(v => ({ id: v.id, name: v.name, start: v.start_date, end: v.end_date, status: v.status }));
   let selected = crews[0] || null;
   let selectedDates = new Set([iso(new Date())]);
   let viewDate = new Date();
   let dragging = false;
-  let sheet = null; // null | menu | vacation | edit
+  let sheet = null; // null | menu | vacation | edit | spreadsheet | item
+  let sheetSource = null; // 'calendar' | 'list'
   let editingPost = null;
+  // Deep link from notification: ?post=ID opens that item
+  const urlPost = new URLSearchParams(location.search).get('post');
+  if (urlPost) {
+    if (!otPosts.some(p => p.id === urlPost)) {
+      const { data: extra } = await sb.from('ot_posts').select('id, dates, hours, note, status, awarded_name, kind, requester_name, shift, created_by').eq('id', urlPost).maybeSingle();
+      if (extra) otPosts.push(extra);
+    }
+    if (otPosts.some(p => p.id === urlPost)) {
+      editingPost = urlPost;
+      sheet = 'item';
+      sheetSource = 'list';
+    }
+    history.replaceState(null, '', location.pathname);
+  }
 
   function crewOnDate(name, date) {
     const data = applied[name];
@@ -662,17 +845,21 @@ async function initSchedule() {
       `;
     }).join('');
     const floatList = floaters.map(op => `<span class="chip">${op.name}</span>`).join(' ') || '<span style="color:#94a3b8;font-size:13px">None</span>';
+    const otNames = new Set(otEntries.filter(e => e.work_date === primary).map(e => (e.operator_name||'').toLowerCase()));
     const readOnlyRoster = workingCrews(primary).map(name => {
       const hit = crewOnDate(name, primary);
       const shift = hit?.token === 'D' ? 'Day' : hit?.token === 'N' ? 'Night' : 'Off';
       const crewOps = operators.filter(op => op.crew === name || ('Crew ' + op.crew) === name || op.crew === name.replace(/^Crew\s+/i, ''));
+      const crewIds = new Set(crewOps.map(op => op.id));
+      const fillIns = operators.filter(op => !crewIds.has(op.id) && (dayAreas[primary + '|' + op.id] || otNames.has((op.name||'').toLowerCase())));
       const rows = crewOps.map(op => {
         const onVac = vacationsOn(primary).some(v => (v.name||'').toLowerCase() === (op.name||'').toLowerCase());
         const area = onVac ? 'Vacation' : areaName(dayAreas[primary + '|' + op.id]);
         return `<div class="row"><span>${op.name}</span><span class="chip${onVac?' vac':''}">${area}</span></div>`;
-      }).join('') || '<p style="color:#94a3b8;font-size:13px">No operators on this crew.</p>';
+      }).concat(fillIns.map(op => `<div class="row"><span>${op.name} · OT</span><span class="chip">${areaName(dayAreas[primary + '|' + op.id])}</span></div>`)).join('') || '<p style="color:#94a3b8;font-size:13px">No operators on this crew.</p>';
       return `<div class="person-card"><div class="person-name">${name} · ${shift}</div>${rows}</div>`;
     }).join('') || '<p style="color:#94a3b8;font-size:13px">No crews scheduled this day.</p>';
+    const fillCard = '';
 
     const people = canEdit ? (onCrew.length ? `
       ${roleRows || '<p style="color:#94a3b8;font-size:13px">Add areas in Settings first.</p>'}
@@ -717,16 +904,35 @@ async function initSchedule() {
     `).join('') : '<p style="color:#94a3b8;font-size:13px">No one is on vacation this day.</p>';
     const upcoming = vacCards;
     const monthKey = iso(viewDate).slice(0, 7);
-    const coverCards = otPosts.filter(p => (p.dates||[]).some(d => String(d).startsWith(monthKey))).map(p => `
-      <button type="button" class="vac-card feed-item cover-item ${p.kind==='vot'?'feed-vot':'feed-ot'}" data-id="${p.id}">
-        <div class="vac-top"><strong>${p.kind==='vot'?'VOT':'OT'}</strong><span class="chip">${((p.dates||[]).length * (+p.hours||0)).toFixed(1)}h</span></div>
-        <div class="vac-dates">${(p.dates||[]).join(', ')}</div>
-        <div class="person-meta">${(p.shift||'Dayshift') + (p.kind==='vot' ? ' · Requested by ' + (p.requester_name||'Operator') : ' · ' + p.hours + 'h per day')}</div>
-      </button>`).join('');
+    const horizon = new Date(viewDate.getFullYear(), viewDate.getMonth() + 6, 1);
+    const horizonKey = iso(horizon).slice(0, 7);
+    const monthPosts = otPosts.filter(p => (p.dates||[]).some(d => {
+      const dk = String(d).slice(0, 7);
+      return dk >= monthKey && dk < horizonKey;
+    }));
+    const otOpen = monthPosts.filter(p => p.kind !== 'vot');
+    const votOpen = monthPosts.filter(p => p.kind === 'vot');
+    function postCard(p) {
+      const total = ((p.dates||[]).length * (+p.hours||0)).toFixed(1);
+      const bidCount = otBids.filter(b => b.post_id === p.id).length;
+      const already = otBids.some(b => b.post_id===p.id && b.operator_name===meOp?.name);
+      const status = already ? 'Bid submitted' : (bidCount ? bidCount + ' bid' + (bidCount===1?'':'s') : 'Open');
+      return `
+        <button type="button" class="vac-card feed-item cover-item ${p.kind==='vot'?'feed-vot':'feed-ot'}" data-id="${p.id}">
+          <div class="vac-top">
+            <strong>${p.kind==='vot'?'VOT':'OT'}</strong>
+            <span class="chip">${status}</span>
+          </div>
+          <div class="vac-dates">${(p.dates||[]).slice(0,3).join(', ')}${(p.dates||[]).length>3?'…':''}</div>
+          <div class="person-meta">${p.shift||'Dayshift'} · ${total}h total${p.kind==='vot' && p.requester_name ? ' · ' + p.requester_name : ''}</div>
+        </button>`;
+    }
+    const otCards = otOpen.map(postCard).join('') || '<p style="color:#94a3b8;font-size:13px;margin:4px 0">None open.</p>';
+    const votCards = votOpen.map(postCard).join('') || '<p style="color:#94a3b8;font-size:13px;margin:4px 0">None open.</p>';
 
     const dateLabel = dates.length > 1 ? `${dates[0]} → ${dates[dates.length-1]}` : primary;
     const hint = `<p class="hint">Click a day or drag a set.</p>`;
-    const viewBody = `<h2 style="margin-top:0">Working this day</h2>${readOnlyRoster}`;
+    const viewBody = `<h2 style="margin-top:0">Working this day</h2>${readOnlyRoster}${fillCard}`;
     const matchingPosts = otPosts.filter(p => (p.dates||[]).some(d => selectedDates.has(d)));
     const sheetHtml = !sheet ? '' : sheet === 'menu' ? `
       <div class="modal-back" id="sheet-back">
@@ -771,7 +977,7 @@ async function initSchedule() {
           ${canBook ? `
             <label>Operator</label>
             <select id="vac-name">
-              ${myCrewOps.map(o => `<option value="${o.name}" ${o.id===meOp?.id?'selected':''}>${o.name}</option>`).join('') || '<option value="">No operators on your crew</option>'}
+              ${(isAdmin ? operators : myCrewOps).map(o => `<option value="${o.name}" ${o.id===meOp?.id?'selected':''}>${o.name}${isAdmin && o.crew ? ' · ' + o.crew : ''}</option>`).join('') || '<option value="">No operators</option>'}
             </select>
           ` : `
             <label>Operator</label>
@@ -868,13 +1074,96 @@ async function initSchedule() {
             </div>`).join('') || '<p style="color:#94a3b8">No open overtime for these days.</p>'}
           <button type="button" class="secondary" id="sheet-back-btn">Back</button>
         </div>
-      </div>` : `
+      </div>` : sheet === 'item' ? (() => {
+        const p = otPosts.find(x => x.id === editingPost);
+        if (!p) return '';
+        const mine = meOp && (p.created_by === ctx.session.user.id || (p.requester_name && p.requester_name.toLowerCase() === (meOp.name||'').toLowerCase()));
+        const canManage = canEdit || mine;
+        const myBid = otBids.find(b => b.post_id === p.id && b.operator_name === meOp?.name);
+        const bidCount = otBids.filter(b => b.post_id === p.id).length;
+        const total = ((p.dates||[]).length * (+p.hours||0)).toFixed(1);
+        return `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal sheet">
+          <p class="role">${p.kind==='vot'?'VOT':'OT'} · ${p.status||'open'}</p>
+          <h2>${(p.dates||[]).join(', ')}</h2>
+          <div class="person-meta">${p.shift||'Dayshift'} · ${p.hours}h/day · ${total}h total</div>
+          ${p.note ? `<div class="person-meta" style="margin-top:6px">${p.note}</div>` : ''}
+          ${p.requester_name ? `<div class="person-meta" style="margin-top:6px">Requested by ${p.requester_name}</div>` : ''}
+          <div class="person-meta" style="margin-top:8px">${myBid ? 'Your bid is in' : (bidCount ? bidCount + ' bid' + (bidCount===1?'':'s') : 'No bids yet')}</div>
+          ${!myBid && meOp ? `<button type="button" class="bid-btn" data-id="${p.id}" style="margin-top:12px">Submit bid</button>` : ''}
+          ${myBid ? `<button type="button" class="secondary retract-btn" data-id="${myBid.id}" style="margin-top:8px">Retract bid</button>` : ''}
+          ${canEdit ? `<div style="margin-top:14px"><p class="role" style="margin-bottom:6px">Bids</p>${
+            otBids.filter(b => b.post_id === p.id).map(b => `<div class="row"><span>${b.operator_name}</span><button type="button" class="secondary award-btn" data-post="${p.id}" data-name="${b.operator_name}" style="width:auto;padding:4px 10px">Award</button></div>`).join('') || '<p style="color:#94a3b8;font-size:13px">No bids yet.</p>'
+          }</div>` : ''}
+          ${canManage ? `<button type="button" id="item-edit" style="margin-top:8px">Edit</button>` : ''}
+          ${canManage ? `<button type="button" class="secondary" id="item-delete">Delete</button>` : ''}
+          <button type="button" class="secondary" id="sheet-close">Close</button>
+        </div>
+      </div>`;
+      })() : sheet === 'spreadsheet' ? (() => {
+        const year = viewDate.getFullYear();
+        const month = viewDate.getMonth();
+        const daysInMonth = new Date(year, month+1, 0).getDate();
+        const ssCrew = selected || crews[0];
+        const days = [];
+        for (let d = 1; d <= daysInMonth; d++) {
+          const date = new Date(year, month, d);
+          const dateIso = iso(date);
+          const hit = ssCrew ? crewOnDate(ssCrew, dateIso) : null;
+          // Only include days where the crew is scheduled to work (not off)
+          if (hit && hit.token !== '-') {
+            days.push({
+              iso: dateIso,
+              num: d,
+              wd: date.toLocaleString('default', {weekday:'short'}).slice(0,2),
+              shift: hit.token === 'D' ? 'D' : 'N'
+            });
+          }
+        }
+        const ssOps = operators.filter(op => ssCrew && (op.crew === ssCrew || ('Crew ' + op.crew) === ssCrew || op.crew === ssCrew.replace(/^Crew\s+/i, '')));
+        const headers = days.map(d => `<th class="ss-day">${d.num}<br><small>${d.wd}${d.shift ? ' · '+d.shift : ''}</small></th>`).join('');
+        const rows = ssOps.map(op => {
+          const cells = days.map(d => {
+            const key = d.iso + '|' + op.id;
+            const val = dayAreas[key] || '';
+            const isVac = onVacation(op, [d.iso]);
+            if (isVac) return `<td class="ss-vac">Vac</td>`;
+            const areaOpts = areas.filter(a => qualifiedFor(op, a.id)).map(a => `<option value="${a.id}" ${val===a.id?'selected':''}>${a.name}</option>`).join('');
+            return `<td><select class="ss-pick" data-date="${d.iso}" data-op="${op.id}">
+              <option value="" ${!val?'selected':''}>—</option>
+              <option value="float" ${val==='float'?'selected':''}>Float</option>
+              ${areaOpts}
+            </select></td>`;
+          }).join('');
+          return `<tr><td class="ss-op">${op.name}</td>${cells}</tr>`;
+        }).join('');
+        return `
+      <div class="modal-back" id="sheet-back">
+        <div class="modal spreadsheet">
+          <p class="role">Spreadsheet edit</p>
+          <h2>${viewDate.toLocaleString('default',{month:'long',year:'numeric'})}</h2>
+          <label>Crew</label>
+          <select id="ss-crew">${crews.map(c => `<option ${c===ssCrew?'selected':''}>${c}</option>`).join('')}</select>
+          <div class="ss-wrap">
+            <table class="ss-table">
+              <thead><tr><th>Operator</th>${headers}</tr></thead>
+              <tbody>${rows || '<tr><td colspan="' + (days.length + 1) + '">' + (days.length ? 'No operators on this crew' : 'No working days this month for this crew') + '</td></tr>'}</tbody>
+            </table>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+            <button type="button" class="secondary" id="ss-close">Close</button>
+            <button type="button" id="ss-save">Save month</button>
+          </div>
+        </div>
+      </div>`;
+      })() : `
       <div class="modal-back" id="sheet-back">
         <div class="modal sheet">
           <p class="role">Edit schedule</p>
           <h2>${dateLabel}</h2>
           <label>Crew</label>
-          <select id="edit-crew-pick">${crews.map(c => `<option ${c===selected?'selected':''}>${c}</option>`).join('')}</select>
+          <select id="edit-crew-pick" ${isAdmin?'':'disabled'}>${(isAdmin ? crews : [selected].filter(Boolean)).map(c => `<option ${c===selected?'selected':''}>${c}</option>`).join('')}</select>
           ${people}
           <button type="button" class="secondary" id="sheet-back-btn">Back</button>
         </div>
@@ -888,7 +1177,7 @@ async function initSchedule() {
 
       <div class="cal-nav">
         <button type="button" class="cal-nav-btn" id="prev" aria-label="Previous month">‹</button>
-        <strong class="cal-title">${viewDate.toLocaleString('default',{month:'long',year:'numeric'})}</strong>
+        <strong class="cal-title">${viewDate.toLocaleString('default',{month:'long',year:'numeric'})}${canEdit ? ` <button type="button" class="ss-inline" id="spreadsheet-btn" aria-label="Spreadsheet edit" title="Edit month in spreadsheet"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg></button>` : ''}</strong>
         <button type="button" class="cal-nav-btn" id="next" aria-label="Next month">›</button>
       </div>
       <div class="cal cal-large" id="cal">${cells}</div>
@@ -898,14 +1187,19 @@ async function initSchedule() {
         <span><i class="lg lg-vac"></i>Vacation</span>
       </div>
       <div class="vac-board">
-        <h2>${viewDate.toLocaleString('default',{month:'long'})}</h2>
-        <div class="vac-list">${coverCards}${vacCards}</div>
+        <h2>Open OT</h2>
+        <div class="vac-list">${otCards}</div>
+        <h2>Open VOT</h2>
+        <div class="vac-list">${votCards}</div>
+        <h2>Vacation · ${viewDate.toLocaleString('default',{month:'long'})}</h2>
+        <div class="vac-list">${vacCards}</div>
       </div>
       ${sheetHtml}
     `;
+    setModalOpen(!!sheet);
 
     document.getElementById('app').addEventListener('click', (e) => {
-      if (e.target.closest('.cal-day[data-date]') || e.target.closest('.modal') || e.target.closest('.cal-nav') || e.target.closest('.cover-item')) return;
+      if (e.target.closest('.cal-day[data-date]') || e.target.closest('.modal') || e.target.closest('.cal-nav') || e.target.closest('.cover-item') || e.target.closest('#spreadsheet-btn')) return;
       if (!selectedDates.size && !sheet) return;
       selectedDates = new Set();
       sheet = null;
@@ -930,6 +1224,7 @@ async function initSchedule() {
       touchSelecting = false;
       dragStart = null;
       sheet = 'menu';
+      sheetSource = 'calendar';
       render();
     };
     cal.querySelectorAll('.cal-day[data-date]').forEach(el => {
@@ -990,7 +1285,7 @@ async function initSchedule() {
     document.getElementById('sheet-back')?.addEventListener('click', (e) => {
       if (e.target.id === 'sheet-back') { sheet = null; render(); }
     });
-    document.getElementById('sheet-back-btn')?.addEventListener('click', () => { sheet = 'menu'; render(); });
+    document.getElementById('sheet-back-btn')?.addEventListener('click', () => { sheet = sheetSource === 'list' ? null : 'menu'; sheetSource = sheet === null ? null : sheetSource; render(); });
     document.querySelectorAll('.cancel-vac').forEach(b => b.onclick = async (e) => {
       e.stopPropagation();
       const vac = vacations.find(v => v.id === b.dataset.id);
@@ -1004,11 +1299,34 @@ async function initSchedule() {
       render();
     });
     document.querySelectorAll('.cover-item').forEach(b => b.onclick = () => {
-      if (!canEdit) { banner(false, 'No permission'); return; }
       editingPost = b.dataset.id;
-      sheet = 'cover';
+      sheetSource = 'list';
+      sheet = 'item';
       render();
     });
+    document.getElementById('item-edit')?.addEventListener('click', () => {
+      sheet = 'cover';
+      sheetSource = 'list';
+      render();
+    });
+    document.getElementById('item-delete')?.addEventListener('click', async () => {
+      if (!editingPost) return;
+      const { error } = await sb.from('ot_posts').delete().eq('id', editingPost);
+      if (error) { banner(false, 'Not deleted: ' + explainError(error)); return; }
+      otPosts = otPosts.filter(p => p.id !== editingPost);
+      banner(true, 'Deleted');
+      sheet = null;
+      sheetSource = null;
+      render();
+    });
+    document.querySelectorAll('.retract-btn').forEach(b => b.onclick = async () => {
+      const { error } = await sb.from('ot_bids').delete().eq('id', b.dataset.id);
+      if (error) { banner(false, 'Could not retract: ' + explainError(error)); return; }
+      otBids = otBids.filter(x => x.id !== b.dataset.id);
+      banner(true, 'Bid retracted');
+      render();
+    });
+
     document.getElementById('cover-save')?.addEventListener('click', async () => {
       if (!canEdit || !editingPost) { banner(false, 'No permission'); return; }
       const hours = +document.getElementById('cover-hours').value || 12;
@@ -1046,7 +1364,8 @@ async function initSchedule() {
       }).select('id, dates, hours, note, status, kind, requester_name, shift').single();
       if (error) { banner(false, 'VOT not requested: ' + explainError(error)); return; }
       otPosts.unshift(row);
-      sb.functions.invoke('send-ot-push', { body: { title: 'VOT requested', body: meOp.name + ' needs coverage', audience: 'all' } }).catch(() => {});
+      const push = await sb.functions.invoke('send-ot-push', { body: { title: 'VOT requested', body: meOp.name + ' needs coverage', audience: 'all', org_id: orgId } });
+      if (push.error || !push.data?.sent) banner(false, 'Push not sent: ' + (push.error?.message || JSON.stringify(push.data||{})));
       banner(true, 'VOT requested');
       sheet = null;
       render();
@@ -1064,7 +1383,7 @@ async function initSchedule() {
       }).select('id, dates, hours, note, status, shift').single();
       if (error) { banner(false, 'Overtime not posted: ' + explainError(error)); return; }
       otPosts.unshift(row);
-      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime posted', body: sortedDates().join(', ') } }).catch(() => {});
+      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime posted', body: sortedDates().join(', '), audience: 'all', org_id: orgId } }).catch(() => {});
       banner(true, 'Overtime posted');
       sheet = null;
       render();
@@ -1072,12 +1391,15 @@ async function initSchedule() {
     document.querySelectorAll('.bid-btn').forEach(b => b.onclick = async () => {
       if (!meOp?.name) { banner(false, 'No operator profile'); return; }
       if (b.textContent === 'Bid submitted') return;
+      // Clear any prior bid for this post+operator so re-bidding after retract works
+      await sb.from('ot_bids').delete().eq('post_id', b.dataset.id).eq('operator_name', meOp.name);
+      otBids = otBids.filter(x => !(x.post_id === b.dataset.id && x.operator_name === meOp.name));
       const { data: row, error } = await sb.from('ot_bids').insert({
         post_id: b.dataset.id, org_id: orgId, operator_name: meOp.name, created_by: ctx.session.user.id
       }).select('id, post_id, operator_name').single();
       if (error) { banner(false, 'Bid not saved: ' + explainError(error)); return; }
       otBids.push(row);
-      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime bid', body: meOp.name + ' bid on a shift' } }).catch(() => {});
+      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime bid', body: meOp.name + ' bid on a shift', audience: 'leads', org_id: orgId } }).catch(() => {});
       banner(true, 'Bid submitted');
       render();
     });
@@ -1092,6 +1414,7 @@ async function initSchedule() {
       }));
       if (rows.length) await sb.from('overtime_entries').insert(rows);
       otPosts = otPosts.filter(p => p.id !== postId);
+      sb.functions.invoke('send-ot-push', { body: { title: 'Overtime awarded', body: (post.dates||[]).join(', '), audience: 'person', name, org_id: orgId } }).catch(() => {});
       banner(true, 'Awarded to ' + name);
       sheet = null;
       render();
@@ -1125,12 +1448,62 @@ async function initSchedule() {
       sheet = 'edit';
       render();
     });
+    document.getElementById('spreadsheet-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!canEdit) { banner(false, 'No permission'); return; }
+      sheet = 'spreadsheet';
+      render();
+    });
+    document.getElementById('ss-crew')?.addEventListener('change', (e) => {
+      selected = e.target.value;
+      render();
+    });
+    document.getElementById('ss-close')?.addEventListener('click', () => {
+      sheet = null;
+      render();
+    });
+    document.getElementById('ss-save')?.addEventListener('click', async () => {
+      if (!canEdit) { banner(false, 'No permission'); return; }
+      const picks = document.querySelectorAll('.ss-pick');
+      const updates = [];
+      const deletes = [];
+      picks.forEach(sel => {
+        const date = sel.dataset.date;
+        const opId = sel.dataset.op;
+        const val = sel.value;
+        const key = date + '|' + opId;
+        if (val) {
+          dayAreas[key] = val;
+          updates.push({
+            org_id: orgId,
+            work_date: date,
+            operator_id: opId,
+            area_id: val === 'float' ? null : val,
+            is_float: val === 'float'
+          });
+        } else if (dayAreas[key]) {
+          delete dayAreas[key];
+          deletes.push({ date, opId });
+        }
+      });
+      if (updates.length) {
+        const { error } = await sb.from('assignments').upsert(updates, { onConflict: 'org_id,work_date,operator_id' });
+        if (error) { banner(false, 'Areas not saved: ' + explainError(error)); return; }
+      }
+      for (const d of deletes) {
+        await sb.from('assignments').delete().eq('org_id', orgId).eq('work_date', d.date).eq('operator_id', d.opId);
+      }
+      banner(true, 'Month schedule saved');
+      sheet = null;
+      render();
+    });
     document.getElementById('vac-submit')?.addEventListener('click', async () => {
       const name = (document.getElementById('vac-name').value || '').trim();
       const start = document.getElementById('vac-start').value;
       const end = document.getElementById('vac-end').value;
       if (!canBook && (!meOp || name !== meOp.name)) { banner(false, 'No permission'); return; }
-      if (canBook && !myCrewOps.some(o => o.name === name)) { banner(false, 'No permission'); return; }
+      if (canBook && !isAdmin && !myCrewOps.some(o => o.name === name)) { banner(false, 'No permission'); return; }
       if (!name || !start || !end) { banner(false, 'Enter a name and dates'); return; }
       const status = canBook ? 'approved' : 'requested';
       const { data: row, error } = await sb.from('vacation_requests').insert({
@@ -1138,6 +1511,9 @@ async function initSchedule() {
       }).select('id').single();
       if (error) { banner(false, 'Vacation not saved: ' + explainError(error)); return; }
       if (status === 'approved') vacations.push({ id: row.id, name, start, end, status });
+      if (status === 'requested') {
+        sb.functions.invoke('send-ot-push', { body: { title: 'Vacation requested', body: name + ' · ' + start + ' → ' + end, audience: 'leads', org_id: orgId } }).catch(() => {});
+      }
       banner(true, status === 'approved' ? 'Vacation booked' : 'Vacation requested');
       sheet = null;
       render();
@@ -1937,7 +2313,7 @@ async function initVot() {
       const { data: row, error } = await sb.from('ot_bids').insert({ post_id: b.dataset.id, org_id: orgId, operator_name: meOp.name, created_by: ctx.session.user.id }).select('id, post_id, operator_name').single();
       if (error) { banner(false, 'Bid not saved: ' + explainError(error)); return; }
       allBids.push(row);
-      sb.functions.invoke('send-ot-push', { body: { title: 'VOT bid', body: meOp.name + ' bid on coverage' } }).catch(() => {});
+      sb.functions.invoke('send-ot-push', { body: { title: 'VOT bid', body: meOp.name + ' bid on coverage', audience: 'leads', org_id: orgId } }).catch(() => {});
       banner(true, 'Bid submitted');
       render();
     });
@@ -2111,6 +2487,7 @@ async function initVacation() {
       if (!approved?.length) { banner(false, 'No permission'); return; }
       const e = entries.find(x => x.id === b.dataset.id);
       if (e) e.status = 'approved';
+      if (e?.name) sb.functions.invoke('send-ot-push', { body: { title: 'Vacation approved', body: e.start + ' → ' + e.end, audience: 'person', name: e.name, org_id: orgId } }).catch(() => {});
       banner(true, 'Vacation approved');
       render();
     });
